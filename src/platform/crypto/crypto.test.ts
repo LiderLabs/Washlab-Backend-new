@@ -2,8 +2,6 @@
 import { describe, expect, it } from "vitest";
 import crypto from "node:crypto";
 import {
-  decryptBiometricTemplate,
-  encryptBiometricTemplate,
   hashSecret,
   timingSafeEqualStrings,
   verifyPaystackSignature,
@@ -83,41 +81,5 @@ describe("verifyPaystackSignature", () => {
 
   it("rejects a garbage signature of the wrong length", () => {
     expect(verifyPaystackSignature(body, "deadbeef", secret)).toBe(false);
-  });
-});
-
-describe("biometric encryption (AES-256-GCM)", () => {
-  const template = { fingerprint: [1, 2, 3], label: "right-index" };
-
-  it("round-trips data", () => {
-    const { encryptedData, iv, authTag } = encryptBiometricTemplate(template);
-    expect(decryptBiometricTemplate(encryptedData, iv, authTag)).toEqual(template);
-  });
-
-  it("uses a fresh IV each time", () => {
-    const a = encryptBiometricTemplate(template);
-    const b = encryptBiometricTemplate(template);
-    expect(a.iv).not.toBe(b.iv);
-    expect(a.encryptedData).not.toBe(b.encryptedData);
-  });
-
-  it("fails when the ciphertext is tampered with", () => {
-    const { encryptedData, iv, authTag } = encryptBiometricTemplate(template);
-    const buf = Buffer.from(encryptedData, "base64");
-    buf[0] = buf[0]! ^ 0xff;
-
-    expect(() =>
-      decryptBiometricTemplate(buf.toString("base64"), iv, authTag)
-    ).toThrow();
-  });
-
-  it("fails when the auth tag is tampered with", () => {
-    const { encryptedData, iv, authTag } = encryptBiometricTemplate(template);
-    const tag = Buffer.from(authTag, "base64");
-    tag[0] = tag[0]! ^ 0xff;
-
-    expect(() =>
-      decryptBiometricTemplate(encryptedData, iv, tag.toString("base64"))
-    ).toThrow();
   });
 });

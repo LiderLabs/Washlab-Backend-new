@@ -12,6 +12,7 @@ import { handleSseConnection } from "./platform/realtime/index.js";
 import { branchRoutes } from "./modules/branches/routes.js";
 import { orderRoutes } from "./modules/orders/routes.js";
 import { paymentRoutes } from "./modules/payments/routes.js";
+import { stationRoutes } from "./modules/station/routes.js";
 import { config } from "./platform/config/index.js";
 
 export async function buildApp() {
@@ -56,6 +57,11 @@ export async function buildApp() {
             type: "http",
             scheme: "bearer",
             bearerFormat: "JWT",
+          },
+          stationToken: {
+            type: "apiKey",
+            in: "header",
+            name: "x-station-token",
           },
         },
       },
@@ -120,6 +126,7 @@ export async function buildApp() {
   await app.register(branchRoutes, { prefix: "/v1/branches" });
   await app.register(orderRoutes, { prefix: "/v1/orders" });
   await app.register(paymentRoutes, { prefix: "/v1/payments" });
+  await app.register(stationRoutes, { prefix: "/v1/station" });
 
   return app;
 }
