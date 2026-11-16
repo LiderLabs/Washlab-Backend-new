@@ -16,6 +16,8 @@ export const branches = pgTable(
     pricingPerKgPesewas: bigint("pricing_per_kg_pesewas", { mode: "bigint" }).notNull(),
     deliveryFeePesewas: bigint("delivery_fee_pesewas", { mode: "bigint" }).notNull().default(sql`0`),
     stationPinHash: varchar("station_pin_hash", { length: 255 }),
+    stationPinFailedAttempts: integer("station_pin_failed_attempts").notNull().default(0),
+    stationPinLockedUntil: timestamp("station_pin_locked_until", { withTimezone: true }),
     requireStationLogin: boolean("require_station_login").notNull().default(true),
     weeklyOrderTarget: integer("weekly_order_target").default(0),
     momoNumber: varchar("momo_number", { length: 32 }),

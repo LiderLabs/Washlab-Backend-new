@@ -9,9 +9,10 @@ const isProd = process.env.NODE_ENV === "production";
 const devDefaults: Record<string, string> = {
   DATABASE_URL: "postgresql://washlab_user:washlab_secret_pass@localhost:5433/washlab_db",
   REDIS_URL: "redis://localhost:6380",
+  CLERK_SECRET_KEY: "sk_test_mock_for_dev",
   CLERK_PUBLISHABLE_KEY: "pk_test_mock_for_dev",
+  PAYSTACK_SECRET_KEY: "sk_test_mock_paystack_for_dev",
   JWT_SECRET: "development_secret_station_session_jwt_key_32chars",
-  BIOMETRIC_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   CORS_ORIGINS: "http://localhost:3000,http://localhost:3001",
 };
 
@@ -47,7 +48,6 @@ const envSchema = z.object({
 
   // Security
   JWT_SECRET: z.string().min(32),
-  BIOMETRIC_ENCRYPTION_KEY: z.string().regex(/^[0-9a-fA-F]{64}$/, "must be 64 hex characters"),
   CORS_ORIGINS: z
     .string()
     .min(1)
