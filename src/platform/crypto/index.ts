@@ -40,7 +40,12 @@ export function timingSafeEqualStrings(a: string, b: string): boolean {
 /**
  * Verify Paystack webhook HMAC SHA-512 signature using constant-time comparison
  */
-export function verifyPaystackSignature(payload: string, signature: string, secretKey: string): boolean {
+export function verifyPaystackSignature(
+  payload: string | Buffer,
+  signature: string | undefined,
+  secretKey: string,
+): boolean {
+  if (!signature) return false;
   const hmac = crypto.createHmac("sha512", secretKey);
   const expectedSignature = hmac.update(payload).digest("hex");
   return timingSafeEqualStrings(expectedSignature, signature);

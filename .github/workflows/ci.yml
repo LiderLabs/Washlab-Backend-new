@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: washlab_user
+          POSTGRES_PASSWORD: washlab_secret_pass
+          POSTGRES_DB: washlab_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U washlab_user -d washlab_db"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Dummy values for CI only. Nothing real belongs here.
+      DATABASE_URL: postgresql://washlab_user:washlab_secret_pass@localhost:5432/washlab_db
+      REDIS_URL: redis://localhost:6379
+      CLERK_SECRET_KEY: sk_test_mock_not_real
+      CLERK_PUBLISHABLE_KEY: pk_test_mock_not_real
+      CLERK_WEBHOOK_SECRET: whsec_mock_not_real
+      PAYSTACK_SECRET_KEY: sk_test_mock_paystack
+      JWT_SECRET: ci_only_jwt_secret_not_real_0123456789abcdef
+      BIOMETRIC_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      CORS_ORIGINS: http://localhost:3000
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply init SQL
+        run: psql "$DATABASE_URL" -f infra/init-db.sql
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Migrate database
+        run: npm run db:migrate
+
+      - name: Test
+        run: npm test
