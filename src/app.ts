@@ -13,6 +13,7 @@ import { branchRoutes } from "./modules/branches/routes.js";
 import { orderRoutes } from "./modules/orders/routes.js";
 import { paymentRoutes } from "./modules/payments/routes.js";
 import { stationRoutes } from "./modules/station/routes.js";
+import { stationOrderRoutes } from "./modules/station/orders.routes.js";
 import { config } from "./platform/config/index.js";
 
 export async function buildApp() {
@@ -127,6 +128,7 @@ export async function buildApp() {
   await app.register(orderRoutes, { prefix: "/v1/orders" });
   await app.register(paymentRoutes, { prefix: "/v1/payments" });
   await app.register(stationRoutes, { prefix: "/v1/station" });
+  await app.register(stationOrderRoutes, { prefix: "/v1/station" });
 
   return app;
 }

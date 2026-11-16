@@ -1,16 +1,9 @@
 import { pgTable, uuid, varchar, bigint, timestamp, index, uniqueIndex, pgEnum, jsonb } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
-import { orders, paymentStatusEnum } from "./orders.js";
+import { orders, paymentStatusEnum, paymentMethodEnum } from "./orders.js";
 import { branches } from "./branches.js";
 import { customers } from "./customers.js";
 import { attendants } from "./staff.js";
-
-export const paymentMethodEnum = pgEnum("payment_method", [
-  "cash",
-  "mobile_money",
-  "card",
-  "voucher",
-]);
 
 export const payments = pgTable(
   "payments",
