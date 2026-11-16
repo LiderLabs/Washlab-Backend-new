@@ -34,10 +34,14 @@ export async function broadcastRealtimeEvent(channel: string, event: string, dat
  * Handle Server-Sent Events (SSE) connection
  */
 export function handleSseConnection(request: FastifyRequest, reply: FastifyReply, channels: string[]) {
+  // Take over the raw socket, but keep the headers other plugins set (CORS, request id).
+  reply.hijack();
+  for (const [k, v] of Object.entries(reply.getHeaders())) {
+    if (v !== undefined) reply.raw.setHeader(k, v as string | number | string[]);
+  }
   reply.raw.setHeader("Content-Type", "text/event-stream");
   reply.raw.setHeader("Cache-Control", "no-cache");
   reply.raw.setHeader("Connection", "keep-alive");
-  reply.raw.setHeader("Access-Control-Allow-Origin", "*");
   reply.raw.flushHeaders();
 
   // Send initial connection ACK

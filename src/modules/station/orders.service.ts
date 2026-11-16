@@ -11,6 +11,7 @@ import { writeAudit, DbExecutor } from "../../platform/audit/index.js";
 import { broadcastRealtimeEvent } from "../../platform/realtime/index.js";
 import type { StationContext } from "../../platform/auth/station.js";
 import { calculatePrice, ServicePrices } from "./pricing.js";
+import { runCompletionEffects } from "./completion.js";
 import type {
   CancelOrderInput,
   CheckInInput,
@@ -411,6 +412,7 @@ async function createWalkIn(station: StationContext, input: WalkInOrderInput, me
       const { branch, services } = await loadBranchPricing(tx, station.branchId);
       const machinePesewas = await machinePrice(tx, station.branchId, input.machineId);
       const price = calculatePrice({
+        mode: "walk_in",
         serviceType: input.serviceType,
         weightKg: input.weightKg,
         services,
@@ -497,6 +499,7 @@ async function checkInOnline(station: StationContext, orderId: string, input: Ch
       const { branch, services } = await loadBranchPricing(tx, station.branchId);
       const machinePesewas = await machinePrice(tx, station.branchId, input.machineId ?? order.machineId);
       const price = calculatePrice({
+        mode: "service",
         serviceType,
         weightKg: input.weightKg,
         services,
@@ -540,6 +543,23 @@ async function checkInOnline(station: StationContext, orderId: string, input: Ch
         changedByRole: "attendant",
         notes: input.notes,
       });
+      // Create (or re-price) the pending MoMo payment so the payment flow has a row to settle.
+      await tx
+        .insert(payments)
+        .values({
+          orderId: order.id,
+          branchId: station.branchId,
+          customerId: order.customerId,
+          amountPesewas: price.totalPesewas,
+          method: "mobile_money",
+          status: "pending",
+          idempotencyKey: `order:${order.id}:checkin`,
+        })
+        .onConflictDoUpdate({
+          target: payments.idempotencyKey,
+          set: { amountPesewas: price.totalPesewas, updatedAt: new Date() },
+          setWhere: eq(payments.status, "pending"),
+        });
       await audit(tx, station, input.attendantId, meta, "order.checked_in", order.id, {
         bagNumber: input.bagNumber,
         weightKg: input.weightKg,
@@ -578,6 +598,7 @@ async function updateDetails(station: StationContext, orderId: string, input: Up
       const { branch, services } = await loadBranchPricing(tx, station.branchId);
       const machinePesewas = await machinePrice(tx, station.branchId, order.machineId);
       const price = calculatePrice({
+        mode: "service",
         serviceType,
         weightKg,
         services,
@@ -674,7 +695,7 @@ async function updateStatus(station: StationContext, orderId: string, input: Upd
       from: order.status,
       to: input.status,
     });
-    // TODO(slice 3+): on "completed" award loyalty points, deduct inventory, send the 10th-wash milestone notification.
+    if (input.status === "completed") await runCompletionEffects(tx, row!);
     const { customer: cust } = await fetchOrder(tx, station.branchId, order.id);
     return { updated: row!, customer: cust };
   });

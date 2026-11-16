@@ -15,6 +15,9 @@ import { paymentRoutes } from "./modules/payments/routes.js";
 import { stationRoutes } from "./modules/station/routes.js";
 import { stationOrderRoutes } from "./modules/station/orders.routes.js";
 import { config } from "./platform/config/index.js";
+import { authenticate } from "./platform/auth/index.js";
+import { authenticateStation, STATION_TOKEN_HEADER } from "./platform/auth/station.js";
+import { ForbiddenError } from "./platform/errors/index.js";
 
 export async function buildApp() {
   const app = fastify({
@@ -102,12 +105,14 @@ export async function buildApp() {
     };
   });
 
-  // Real-time Server-Sent Events stream
+  // Real-time Server-Sent Events stream. Authenticated: send x-station-token (attendant app) or a Clerk
+  // Authorization header. Native EventSource can't set headers, so clients use fetch streaming instead.
   app.get(
     "/v1/events/stream",
     {
       schema: {
         tags: ["Realtime"],
+        security: [{ stationToken: [] }, { bearerAuth: [] }],
         querystring: {
           type: "object",
           properties: {
@@ -115,10 +120,30 @@ export async function buildApp() {
           },
         },
       },
+      onRequest: async (request) => {
+        const q = request.query as { channels?: string };
+        const channels = q.channels ? q.channels.split(",").map((c) => c.trim()).filter(Boolean) : [];
+        if (channels.length === 0 || channels.length > 20) {
+          throw new ForbiddenError("Choose 1-20 channels", "CHANNELS_REQUIRED");
+        }
+        if (request.headers[STATION_TOKEN_HEADER]) {
+          await authenticateStation(request);
+          const allowed = `branch:${request.station!.branchId}`;
+          if (channels.some((c) => c !== allowed)) {
+            throw new ForbiddenError("A station can only listen to its own branch", "CHANNEL_FORBIDDEN");
+          }
+          return;
+        }
+        await authenticate(request);
+        const user = request.user!;
+        if (user.role === "admin" || user.role === "super_admin") return;
+        if (user.role === "attendant" && channels.every((c) => c === `branch:${user.branchId}`)) return;
+        throw new ForbiddenError("Not allowed to listen to these channels", "CHANNEL_FORBIDDEN");
+      },
     },
     async (request, reply) => {
       const query = request.query as { channels?: string };
-      const channels = query.channels ? query.channels.split(",") : ["global"];
+      const channels = query.channels!.split(",").map((c) => c.trim()).filter(Boolean);
       return handleSseConnection(request, reply, channels);
     }
   );

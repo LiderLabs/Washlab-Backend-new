@@ -12,6 +12,12 @@ export type ServicePrices = {
 };
 
 export type PricingInput = {
+  /**
+   * Matches the Convex backend, which priced the two flows differently:
+   *  - "walk_in": a machine price overrides the service price, and wash_and_dry = wash_only + dry_only per load.
+   *  - "service": check-in and edit. Per-load rate is the service's own price; machines are ignored.
+   */
+  mode: "walk_in" | "service";
   serviceType: string;
   weightKg: number;
   /** price rows for this branch, keyed by service code */
@@ -45,12 +51,13 @@ export function calculatePrice(i: PricingInput): PricingResult {
   const washOnly = i.services["wash_only"]?.pricePesewas;
   const dryOnly = i.services["dry_only"]?.pricePesewas;
 
-  const perLoad = i.machineWashPricePesewas ?? svc?.pricePesewas ?? i.branchFallbackPerLoadPesewas;
+  const machine = i.mode === "walk_in" ? i.machineWashPricePesewas : null;
+  const perLoad = machine ?? svc?.pricePesewas ?? i.branchFallbackPerLoadPesewas;
   const washUnit = washOnly ?? perLoad;
   const dryUnit = dryOnly ?? perLoad;
 
-  // wash_and_dry is charged as a wash load plus a dry load.
-  const effectivePerLoad = i.serviceType === "wash_and_dry" ? washUnit + dryUnit : perLoad;
+  // Walk-in only: wash_and_dry is charged as a wash load plus a dry load.
+  const effectivePerLoad = i.mode === "walk_in" && i.serviceType === "wash_and_dry" ? washUnit + dryUnit : perLoad;
 
   const loads = loadsForWeight(i.weightKg);
   const basePricePesewas = BigInt(loads) * effectivePerLoad;

@@ -8,6 +8,7 @@ const p = (n: number, extraWash: number | null = null, extraDry: number | null =
 });
 
 const base: PricingInput = {
+  mode: "walk_in",
   serviceType: "wash_only",
   weightKg: 5,
   services: { wash_only: p(3000), dry_only: p(2000), wash_and_dry: p(5000) },
@@ -37,6 +38,11 @@ describe("calculatePrice", () => {
   it("wash_and_dry is wash + dry per load", () => {
     const r = calculatePrice({ ...base, serviceType: "wash_and_dry", weightKg: 9 });
     expect(r.basePricePesewas).toBe(10000n); // 2 x (3000 + 2000)
+  });
+
+  it("service mode (check-in, edit) uses the service's own price and ignores machines", () => {
+    const r = calculatePrice({ ...base, mode: "service", serviceType: "wash_and_dry", weightKg: 9, machineWashPricePesewas: 100n });
+    expect(r.basePricePesewas).toBe(2n * 5000n); // 2 loads x the wash_and_dry price, not wash + dry
   });
 
   it("uses the machine price when one is selected", () => {

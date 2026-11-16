@@ -6,6 +6,9 @@ import { branches } from "../../platform/db/schema/branches.js";
 import { branchServices } from "../../platform/db/schema/catalog.js";
 import { customers } from "../../platform/db/schema/customers.js";
 import { orders, orderStatusEvents } from "../../platform/db/schema/orders.js";
+import { payments } from "../../platform/db/schema/payments.js";
+import { loyaltyLedger } from "../../platform/db/schema/loyalty.js";
+import { inventoryItems, notifications } from "../../platform/db/schema/operations.js";
 import { attendanceLogs, attendants } from "../../platform/db/schema/staff.js";
 import { hashPin } from "../../platform/crypto/pin.js";
 import { buildApp } from "../../app.js";
@@ -128,6 +131,11 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  const orderIds = (await db.select({ id: orders.id }).from(orders).where(inArray(orders.branchId, branchIds))).map((o) => o.id);
+  if (orderIds.length) {
+    await db.delete(loyaltyLedger).where(inArray(loyaltyLedger.orderId, orderIds));
+    await db.delete(payments).where(inArray(payments.orderId, orderIds));
+  }
   await db.delete(orders).where(inArray(orders.branchId, branchIds));
   await db.delete(attendanceLogs).where(inArray(attendanceLogs.branchId, branchIds));
   await db.delete(attendants).where(inArray(attendants.id, attendantIds));
@@ -401,5 +409,114 @@ describe("listing and customers", () => {
 
     const found = (await call(tokenA, "GET", `/customers/search?q=${tail}`)).json();
     expect(found.some((c: any) => c.id === first.json().customer.id)).toBe(true);
+  });
+});
+
+describe("walk-in vs check-in pricing (as in the original)", () => {
+  it("check-in charges the service's own price for wash_and_dry; walk-in sums wash + dry", async () => {
+    const walk = (await walkIn({ serviceType: "wash_and_dry", weightKg: 9 })).json();
+    expect(walk.finalPricePesewas).toBe(2 * (3000 + 2000));
+
+    const o = await mkOnlineOrder({ serviceType: "wash_and_dry" });
+    const r = await call(tokenA, "POST", `/orders/${o.id}/check-in`, { attendantId: attA, weightKg: 9, bagNumber: nextBag() });
+    expect(r.json().finalPricePesewas).toBe(2 * 5000);
+  });
+});
+
+describe("check-in payment row", () => {
+  it("creates one pending MoMo payment for the order total and re-prices it on edit", async () => {
+    const o = await mkOnlineOrder({ serviceType: "wash_only" });
+    await call(tokenA, "POST", `/orders/${o.id}/check-in`, { attendantId: attA, weightKg: 5, bagNumber: nextBag() });
+    let rows = await db.select().from(payments).where(eq(payments.orderId, o.id));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ method: "mobile_money", status: "pending", amountPesewas: 3000n });
+
+    await call(tokenA, "PATCH", `/orders/${o.id}`, { attendantId: attA, weightKg: 17 });
+    rows = await db.select().from(payments).where(eq(payments.orderId, o.id));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.amountPesewas).toBe(9000n);
+  });
+});
+
+describe("completion effects", () => {
+  it("awards one loyalty point, only once", async () => {
+    const o = (await walkIn()).json();
+    await call(tokenA, "POST", `/orders/${o.id}/status`, { attendantId: attA, status: "completed" });
+    const rows = await db.select().from(loyaltyLedger).where(eq(loyaltyLedger.orderId, o.id));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ pointsDelta: 1, reason: "order_completed" });
+  });
+
+  it("deducts soap and tokens and updates stock status", async () => {
+    const [soap] = await db
+      .insert(inventoryItems)
+      .values({ branchId: branchA, name: "Soap", category: "cleaning_supplies", unit: "unit", currentStock: 10, minStock: 2, reorderPoint: 8 })
+      .returning();
+    const [tokens] = await db
+      .insert(inventoryItems)
+      .values({ branchId: branchA, name: "Tokens", category: "operational", unit: "token", currentStock: 6, minStock: 1, reorderPoint: 4 })
+      .returning();
+
+    // wash_and_dry, 9 kg = 2 loads: 2 wash + 2 dry = 4 tokens
+    const o = (await walkIn({ serviceType: "wash_and_dry", weightKg: 9 })).json();
+    await call(tokenA, "POST", `/orders/${o.id}/status`, { attendantId: attA, status: "completed" });
+
+    const [s2] = await db.select().from(inventoryItems).where(eq(inventoryItems.id, soap!.id));
+    const [t2] = await db.select().from(inventoryItems).where(eq(inventoryItems.id, tokens!.id));
+    expect(s2).toMatchObject({ currentStock: 9, status: "ok" });
+    expect(t2).toMatchObject({ currentStock: 2, status: "low" }); // 6 - 4, at/below reorder point 4
+
+    await db.delete(inventoryItems).where(inArray(inventoryItems.id, [soap!.id, tokens!.id]));
+  });
+
+  it("never lets stock go below zero", async () => {
+    const [t] = await db
+      .insert(inventoryItems)
+      .values({ branchId: branchA, name: "Tokens2", category: "operational", unit: "token", currentStock: 1, minStock: 0, reorderPoint: 0 })
+      .returning();
+    const o = (await walkIn({ serviceType: "wash_and_dry", weightKg: 9 })).json();
+    await call(tokenA, "POST", `/orders/${o.id}/status`, { attendantId: attA, status: "completed" });
+    const [t2] = await db.select().from(inventoryItems).where(eq(inventoryItems.id, t!.id));
+    expect(t2).toMatchObject({ currentStock: 0, status: "critical" });
+    await db.delete(inventoryItems).where(eq(inventoryItems.id, t!.id));
+  });
+
+  it("notifies admins and the station on every 10th completed wash", async () => {
+    const c = await mkCustomer("Milestone Mensah");
+    for (let i = 0; i < 10; i++) {
+      const o = (await walkIn({ customerId: c })).json();
+      await call(tokenA, "POST", `/orders/${o.id}/status`, { attendantId: attA, status: "completed" });
+    }
+    const rows = await db.select().from(notifications).where(eq(notifications.entityId, c));
+    expect(rows.map((r) => r.recipientType).sort()).toEqual(["admin", "station"]);
+    expect(rows.find((r) => r.recipientType === "station")!.recipientId).toBe(branchA);
+    await db.delete(notifications).where(eq(notifications.entityId, c));
+  });
+
+  it("skips a duplicate loyalty award without failing the status change", async () => {
+    const o = (await walkIn()).json();
+    await db.insert(loyaltyLedger).values({ customerId: cust, orderId: o.id, pointsDelta: 1, reason: "order_completed" });
+    const r = await call(tokenA, "POST", `/orders/${o.id}/status`, { attendantId: attA, status: "completed" });
+    expect(r.statusCode).toBe(200); // duplicate award is skipped silently
+    expect(r.json().status).toBe("completed");
+  });
+});
+
+describe("SSE auth", () => {
+  const stream = (headers: Record<string, string>, channels: string) =>
+    app.inject({ method: "GET", url: `/v1/events/stream?channels=${encodeURIComponent(channels)}`, headers });
+
+  it("rejects anonymous subscribers", async () => {
+    expect((await stream({}, `branch:${branchA}`)).statusCode).toBe(401);
+  });
+
+  it("stops a station listening to another branch or to global", async () => {
+    expect((await stream(hdr(tokenA), `branch:${branchB}`)).statusCode).toBe(403);
+    expect((await stream(hdr(tokenA), "global")).statusCode).toBe(403);
+    expect((await stream(hdr(tokenA), `branch:${branchA},branch:${branchB}`)).statusCode).toBe(403);
+  });
+
+  it("requires a channel", async () => {
+    expect((await app.inject({ method: "GET", url: "/v1/events/stream", headers: hdr(tokenA) })).statusCode).toBe(403);
   });
 });
