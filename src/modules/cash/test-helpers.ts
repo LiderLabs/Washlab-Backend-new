@@ -25,6 +25,7 @@ import { branches } from "../../platform/db/schema/branches.js";
 import { customers } from "../../platform/db/schema/customers.js";
 import { orders } from "../../platform/db/schema/orders.js";
 import { payments, webhookEvents } from "../../platform/db/schema/payments.js";
+import { dailyReports } from "../../platform/db/schema/reports.js";
 import { attendanceLogs, attendants } from "../../platform/db/schema/staff.js";
 import { hashPin } from "../../platform/crypto/pin.js";
 import type { PaystackClient, PaystackVerification } from "../../platform/paystack/index.js";
@@ -68,6 +69,7 @@ export async function destroyBranch(f: { branchId: string; customerId: string })
   const os = await db.select({ id: orders.id }).from(orders).where(eq(orders.branchId, f.branchId));
   if (os.length) await db.delete(payments).where(inArray(payments.orderId, os.map((o) => o.id)));
   await purgeCash([f.branchId]);
+  await db.delete(dailyReports).where(eq(dailyReports.branchId, f.branchId));
   await db.delete(orders).where(eq(orders.branchId, f.branchId));
   await db.delete(attendanceLogs).where(eq(attendanceLogs.branchId, f.branchId));
   await db.delete(attendants).where(eq(attendants.branchId, f.branchId));

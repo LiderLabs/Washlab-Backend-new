@@ -43,6 +43,13 @@
       "when": 1794910603697,
       "tag": "0005_cash_ledger",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794913495824,
+      "tag": "0006_daily_reports",
+      "breakpoints": true
     }
   ]
 }

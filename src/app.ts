@@ -15,6 +15,7 @@ import { paymentRoutes } from "./modules/payments/routes.js";
 import { stationRoutes } from "./modules/station/routes.js";
 import { stationOrderRoutes } from "./modules/station/orders.routes.js";
 import { stationCashRoutes } from "./modules/station/cash.routes.js";
+import { stationReportRoutes } from "./modules/station/reports.routes.js";
 import { config } from "./platform/config/index.js";
 import { authenticate } from "./platform/auth/index.js";
 import { authenticateStation, STATION_TOKEN_HEADER } from "./platform/auth/station.js";
@@ -156,6 +157,7 @@ export async function buildApp() {
   await app.register(stationRoutes, { prefix: "/v1/station" });
   await app.register(stationOrderRoutes, { prefix: "/v1/station" });
   await app.register(stationCashRoutes, { prefix: "/v1/station/cash" });
+  await app.register(stationReportRoutes, { prefix: "/v1/station/reports" });
 
   return app;
 }
