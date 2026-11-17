@@ -253,8 +253,9 @@ export const stationServiceSchema = z.object({
 
 export const stationPaymentInputSchema = z.object({
   paymentMethod: z.enum(["cash", "mobile_money"]),
-  amountTenderedPesewas: z.string().optional(),
-  attendantId: z.string().uuid().optional(),
+  /** Cash only: what the customer handed over. Must cover the amount due; the change is returned. */
+  amountTenderedPesewas: z.string().regex(/^\d+$/, "Amount must be a whole number of pesewas").optional(),
+  attendantId: z.string().uuid(),
 });
 
 export const stationPaymentResponseSchema = z.object({
@@ -264,6 +265,7 @@ export const stationPaymentResponseSchema = z.object({
   orderNumber: z.string(),
   status: z.string(),
   amountPesewas: z.string(),
+  changePesewas: z.string().optional(),
 });
 
 export type StationLoginInput = z.infer<typeof stationLoginSchema>;

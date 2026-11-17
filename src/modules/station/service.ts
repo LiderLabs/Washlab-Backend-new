@@ -8,7 +8,6 @@ import { inventoryItems, notifications } from "../../platform/db/schema/operatio
 import { branchMachines, branchServices } from "../../platform/db/schema/catalog.js";
 import { auditLogs } from "../../platform/db/schema/infrastructure.js";
 import { customers } from "../../platform/db/schema/customers.js";
-import { broadcastRealtimeEvent } from "../../platform/realtime/index.js";
 import {
   AppError,
   BadRequestError,
@@ -33,7 +32,6 @@ import type {
   StationActivityQuery,
   StationAttendanceHistoryQuery,
   StationLoginInput,
-  StationPaymentInput,
   StationStatsQuery,
   StationTransactionsQuery,
   UpdateStockInput,
@@ -931,92 +929,6 @@ async function listServices(station: StationContext) {
   }));
 }
 
-// ---------- Payment Collection ----------
-
-async function recordOrderPayment(
-  station: StationContext,
-  orderId: string,
-  input: StationPaymentInput,
-  meta: RequestMeta
-) {
-  const [order] = await db
-    .select()
-    .from(orders)
-    .where(and(eq(orders.id, orderId), eq(orders.branchId, station.branchId), isNull(orders.deletedAt)))
-    .limit(1);
-
-  if (!order) throw new NotFoundError("Order not found", "ORDER_NOT_FOUND");
-  if (order.paymentStatus === "successful") {
-    throw new ConflictError("Order is already paid", "ORDER_ALREADY_PAID");
-  }
-
-  const isCash = input.paymentMethod === "cash";
-  const paymentStatus = isCash ? "successful" : "pending";
-
-  const paymentId = await db.transaction(async (tx) => {
-    const [paymentRow] = await tx
-      .insert(payments)
-      .values({
-        orderId: order.id,
-        branchId: station.branchId,
-        customerId: order.customerId,
-        amountPesewas: order.finalPricePesewas,
-        currency: "GHS",
-        method: input.paymentMethod,
-        status: paymentStatus,
-        paidAt: isCash ? new Date() : null,
-      })
-      .returning({ id: payments.id });
-
-    await tx
-      .update(orders)
-      .set({
-        paymentStatus: isCash ? "successful" : "pending",
-        paymentMethod: input.paymentMethod,
-        updatedAt: new Date(),
-      })
-      .where(eq(orders.id, order.id));
-
-    await writeAudit(tx, {
-      actorId: input.attendantId ?? station.deviceId,
-      actorRole: "attendant",
-      action: "orders.record_payment",
-      entityType: "payment",
-      entityId: paymentRow!.id,
-      changes: {
-        orderId: order.id,
-        orderNumber: order.orderNumber,
-        amountPesewas: order.finalPricePesewas.toString(),
-        method: input.paymentMethod,
-        status: paymentStatus,
-      },
-      ipAddress: meta.ip,
-      userAgent: meta.userAgent,
-    });
-
-    return paymentRow!.id;
-  });
-
-  broadcastRealtimeEvent(`branch:${station.branchId}`, {
-    type: "order.updated",
-    payload: {
-      orderId: order.id,
-      orderNumber: order.orderNumber,
-      paymentStatus: isCash ? "successful" : "pending",
-      paymentMethod: input.paymentMethod,
-    },
-  });
-
-  return {
-    success: true,
-    paymentId,
-    orderId: order.id,
-    orderNumber: order.orderNumber,
-    status: paymentStatus,
-    amountPesewas: order.finalPricePesewas.toString(),
-  };
-}
-
 export const stationService = {
   login,
   logout,
@@ -1042,5 +954,4 @@ export const stationService = {
   markAllNotificationsRead,
   listMachines,
   listServices,
-  recordOrderPayment,
 };

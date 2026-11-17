@@ -14,6 +14,7 @@ export type StationContext = {
   branchId: string;
   deviceId: string;
   expiresAt: Date;
+  loggedInAt: Date;
 };
 
 declare module "fastify" {
@@ -44,6 +45,7 @@ export async function authenticateStation(request: FastifyRequest) {
       branchId: stationSessions.branchId,
       deviceId: stationSessions.deviceId,
       expiresAt: stationSessions.expiresAt,
+      loggedInAt: stationSessions.createdAt,
     })
     .from(stationSessions)
     .innerJoin(branches, eq(branches.id, stationSessions.branchId))

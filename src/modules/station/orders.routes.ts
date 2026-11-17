@@ -210,6 +210,6 @@ export async function stationOrderRoutes(app: FastifyInstance) {
       },
     },
     async (request) =>
-      stationService.recordOrderPayment(requireStation(request), request.params.id, request.body, meta(request))
+      svc.recordPayment(requireStation(request), request.params.id, request.body, meta(request))
   );
 }

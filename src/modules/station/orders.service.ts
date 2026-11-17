@@ -12,6 +12,7 @@ import { broadcastRealtimeEvent } from "../../platform/realtime/index.js";
 import type { StationContext } from "../../platform/auth/station.js";
 import { calculatePrice, ServicePrices } from "./pricing.js";
 import { runCompletionEffects } from "./completion.js";
+import type { StationPaymentInput } from "./schemas.js";
 import type {
   CancelOrderInput,
   CheckInInput,
@@ -147,7 +148,7 @@ function toOrderDto(o: OrderRow, c: CustomerRow | { id: string; name: string; ph
   };
 }
 
-/** Realtime payloads carry ids only (the SSE channel is not authenticated yet, so no customer data goes out). */
+/** Realtime payloads carry ids only; the SSE stream is branch-scoped, but customer data still stays out of events. */
 function notifyBranch(branchId: string, event: string, order: { id: string; status: string }) {
   void broadcastRealtimeEvent(`branch:${branchId}`, event, { orderId: order.id, status: order.status });
 }
@@ -732,6 +733,111 @@ async function cancelOnline(station: StationContext, orderId: string, input: Can
   return toOrderDto(updated, customer);
 }
 
+/**
+ * Take payment for a walk-in order at the counter.
+ *  - cash is recorded as paid straight away (optionally with the amount tendered, which returns change)
+ *  - mobile money leaves the payment pending until the gateway confirms it
+ * The order row is locked, so two taps (or two devices) can never record two payments, and an existing
+ * pending payment row for the order is reused rather than duplicated.
+ */
+async function recordPayment(station: StationContext, orderId: string, input: StationPaymentInput, meta: RequestMeta) {
+  const out = await db.transaction(async (tx) => {
+    const att = await requireClockedIn(tx, station.branchId, input.attendantId);
+    const order = await lockOrder(tx, station.branchId, orderId);
+
+    if (order.orderType !== "walk_in") {
+      throw new ConflictError("Online orders are paid through the customer app", "ORDER_NOT_WALK_IN");
+    }
+    if (order.status === "cancelled") {
+      throw new ConflictError("Cannot take payment for a cancelled order", "ORDER_CANCELLED");
+    }
+    if (order.paymentStatus === "successful") {
+      throw new ConflictError("Order is already paid", "ORDER_ALREADY_PAID");
+    }
+
+    const amount = order.finalPricePesewas;
+    const isCash = input.paymentMethod === "cash";
+    const status = isCash ? "successful" : "pending";
+
+    let tendered: bigint | undefined;
+    let change: bigint | undefined;
+    if (isCash && input.amountTenderedPesewas !== undefined) {
+      tendered = BigInt(input.amountTenderedPesewas);
+      if (tendered < amount) {
+        throw new BadRequestError("Amount tendered is less than the amount due", "INSUFFICIENT_TENDER");
+      }
+      change = tendered - amount;
+    }
+
+    const now = new Date();
+    const metadata = {
+      attendantId: input.attendantId,
+      attendanceId: att.attendanceId,
+      ...(tendered !== undefined ? { tenderedPesewas: tendered.toString(), changePesewas: change!.toString() } : {}),
+    };
+
+    const [pending] = await tx
+      .select({ id: payments.id })
+      .from(payments)
+      .where(and(eq(payments.orderId, order.id), eq(payments.status, "pending")))
+      .for("update")
+      .limit(1);
+
+    let paymentId: string;
+    if (pending) {
+      await tx
+        .update(payments)
+        .set({ method: input.paymentMethod, status, amountPesewas: amount, paidAt: isCash ? now : null, metadata, updatedAt: now })
+        .where(eq(payments.id, pending.id));
+      paymentId = pending.id;
+    } else {
+      const [row] = await tx
+        .insert(payments)
+        .values({
+          orderId: order.id,
+          branchId: station.branchId,
+          customerId: order.customerId,
+          amountPesewas: amount,
+          currency: "GHS",
+          method: input.paymentMethod,
+          status,
+          paidAt: isCash ? now : null,
+          metadata,
+        })
+        .returning({ id: payments.id });
+      paymentId = row!.id;
+    }
+
+    await tx
+      .update(orders)
+      .set({ paymentStatus: status, paymentMethod: input.paymentMethod, updatedAt: now })
+      .where(eq(orders.id, order.id));
+
+    await audit(tx, station, input.attendantId, meta, "order.payment_recorded", order.id, {
+      paymentId,
+      orderNumber: order.orderNumber,
+      method: input.paymentMethod,
+      status,
+      amountPesewas: amount.toString(),
+      ...(tendered !== undefined ? { tenderedPesewas: tendered.toString(), changePesewas: change!.toString() } : {}),
+    });
+
+    return { paymentId, order, status, amount, change };
+  });
+
+  notifyBranch(station.branchId, "order.updated", { id: out.order.id, status: out.order.status });
+
+  return {
+    success: true,
+    paymentId: out.paymentId,
+    orderId: out.order.id,
+    orderNumber: out.order.orderNumber,
+    status: out.status,
+    amountPesewas: out.amount.toString(),
+    ...(out.change !== undefined ? { changePesewas: out.change.toString() } : {}),
+  };
+}
+
 export const stationOrdersService = {
   searchCustomers,
   findOrCreateCustomer,
@@ -743,4 +849,5 @@ export const stationOrdersService = {
   updateDetails,
   updateStatus,
   cancelOnline,
+  recordPayment,
 };
