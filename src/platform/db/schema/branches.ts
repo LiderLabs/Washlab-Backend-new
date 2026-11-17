@@ -20,6 +20,8 @@ export const branches = pgTable(
     stationPinLockedUntil: timestamp("station_pin_locked_until", { withTimezone: true }),
     requireStationLogin: boolean("require_station_login").notNull().default(true),
     weeklyOrderTarget: integer("weekly_order_target").default(0),
+    // When true, new outstanding cash is NOT auto-offset by earlier over-send credit (branches under manual audit).
+    creditAutoApplyDisabled: boolean("credit_auto_apply_disabled").notNull().default(false),
     momoNumber: varchar("momo_number", { length: 32 }),
     isActive: boolean("is_active").notNull().default(true),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),

@@ -3,6 +3,7 @@ import { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { authenticateStation, requireStation, STATION_TOKEN_HEADER } from "../../platform/auth/station.js";
 import { stationOrdersService as svc } from "./orders.service.js";
+import { finalizeBody, finalizeResponse } from "./cash.schemas.js";
 import { stationService } from "./service.js";
 import { stationPaymentInputSchema, stationPaymentResponseSchema } from "./schemas.js";
 import {
@@ -211,5 +212,21 @@ export async function stationOrderRoutes(app: FastifyInstance) {
     },
     async (request) =>
       svc.recordPayment(requireStation(request), request.params.id, request.body, meta(request))
+  );
+
+  server.post(
+    "/orders/:id/payment/finalize",
+    {
+      ...base,
+      schema: {
+        tags: ["Station orders"],
+        summary: "After the Paystack popup: verify the reference with Paystack server-side and mark the order paid",
+        security,
+        params: orderIdParams,
+        body: finalizeBody,
+        response: { 200: finalizeResponse },
+      },
+    },
+    async (request) => svc.finalizePayment(requireStation(request), request.params.id, request.body.reference)
   );
 }

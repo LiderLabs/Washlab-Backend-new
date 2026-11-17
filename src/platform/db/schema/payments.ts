@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, bigint, timestamp, index, uniqueIndex, pgEnum, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, bigint, timestamp, index, uniqueIndex, jsonb, check } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { orders, paymentStatusEnum, paymentMethodEnum } from "./orders.js";
 import { branches } from "./branches.js";
@@ -19,6 +19,8 @@ export const payments = pgTable(
     status: paymentStatusEnum("status").notNull().default("pending"),
     gatewayReference: varchar("gateway_reference", { length: 128 }).unique(),
     idempotencyKey: varchar("idempotency_key", { length: 128 }).unique(),
+    gatewayTransactionId: varchar("gateway_transaction_id", { length: 64 }),
+    processedByAttendantId: uuid("processed_by_attendant_id").references(() => attendants.id, { onDelete: "set null" }),
     metadata: jsonb("metadata"),
     paidAt: timestamp("paid_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -26,6 +28,16 @@ export const payments = pgTable(
   },
   (table) => [
     index("idx_payments_branch_date").on(table.branchId, table.createdAt),
+    index("idx_payments_order").on(table.orderId),
+    // Cash ledger buckets by paid_at, so it needs to be cheap to scan per branch.
+    index("idx_payments_branch_paid").on(table.branchId, table.paidAt).where(sql`status = 'paid'`),
+    // A MoMo or card payment can't be marked paid without a gateway reference
+    // (this is what stops cash being recorded as MoMo, and MoMo with no proof of payment).
+    check(
+      "chk_gateway_payment_has_reference",
+      sql`method NOT IN ('mobile_money','card') OR status <> 'paid' OR gateway_reference IS NOT NULL`
+    ),
+    check("chk_payment_amount_positive", sql`amount_pesewas >= 0`),
     index("idx_payments_reconciliation").on(table.status, table.createdAt).where(sql`status = 'pending'`),
   ]
 );
@@ -44,27 +56,6 @@ export const webhookEvents = pgTable(
   },
   (table) => [
     uniqueIndex("uq_provider_event").on(table.provider, table.eventId),
-  ]
-);
-
-export const cashReconciliations = pgTable(
-  "cash_reconciliations",
-  {
-    id: uuid("id").defaultRandom().primaryKey(),
-    legacyConvexId: varchar("legacy_convex_id", { length: 64 }).unique(),
-    branchId: uuid("branch_id").notNull().references(() => branches.id, { onDelete: "restrict" }),
-    attendantId: uuid("attendant_id").notNull().references(() => attendants.id, { onDelete: "restrict" }),
-    expectedAmountPesewas: bigint("expected_amount_pesewas", { mode: "bigint" }).notNull(),
-    actualAmountPesewas: bigint("actual_amount_pesewas", { mode: "bigint" }).notNull(),
-    discrepancyPesewas: bigint("discrepancy_pesewas", { mode: "bigint" }).notNull().default(sql`0`),
-    status: varchar("status", { length: 32 }).notNull().default("submitted"), // 'submitted', 'verified', 'discrepancy'
-    verifiedByAdminId: uuid("verified_by_admin_id"),
-    verifiedAt: timestamp("verified_at", { withTimezone: true }),
-    notes: varchar("notes", { length: 500 }),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => [
-    index("idx_cash_reconciliation_branch").on(table.branchId, table.createdAt),
   ]
 );
 

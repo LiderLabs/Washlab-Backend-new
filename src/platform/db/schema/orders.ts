@@ -28,7 +28,7 @@ export const BAG_RELEASING_STATUSES = ["completed", "cancelled", "delivered"] as
 
 export const paymentStatusEnum = pgEnum("payment_status", [
   "pending",
-  "successful",
+  "paid",
   "failed",
   "refunded",
 ]);

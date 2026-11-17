@@ -3,6 +3,7 @@ export * from "./staff.js";
 export * from "./customers.js";
 export * from "./catalog.js";
 export * from "./operations.js";
+export * from "./cash.js";
 export * from "./orders.js";
 export * from "./payments.js";
 export * from "./loyalty.js";

@@ -12,6 +12,12 @@ import { broadcastRealtimeEvent } from "../../platform/realtime/index.js";
 import type { StationContext } from "../../platform/auth/station.js";
 import { calculatePrice, ServicePrices } from "./pricing.js";
 import { runCompletionEffects } from "./completion.js";
+import { randomBytes } from "node:crypto";
+import { stationService } from "./service.js";
+import { addCollected } from "../cash/ledger.js";
+import { settleOrderPayment } from "../payments/settle.js";
+import { paystack } from "../../platform/paystack/index.js";
+import { config } from "../../platform/config/index.js";
 import type { StationPaymentInput } from "./schemas.js";
 import type {
   CancelOrderInput,
@@ -584,7 +590,7 @@ async function updateDetails(station: StationContext, orderId: string, input: Up
     ({ updated, customer } = await db.transaction(async (tx) => {
       await requireClockedIn(tx, station.branchId, input.attendantId);
       const order = await lockOrder(tx, station.branchId, orderId);
-      if (order.paymentStatus === "successful") throw new ConflictError("Cannot edit a paid order", "ORDER_PAID");
+      if (order.paymentStatus === "paid") throw new ConflictError("Cannot edit a paid order", "ORDER_PAID");
       if (TERMINAL.includes(order.status as any)) throw new ConflictError("Order is closed", "ORDER_CLOSED");
       if (order.status === "pending_dropoff") {
         throw new ConflictError("Check the order in before editing it", "ORDER_NOT_CHECKED_IN");
@@ -741,6 +747,9 @@ async function cancelOnline(station: StationContext, orderId: string, input: Can
  * pending payment row for the order is reused rather than duplicated.
  */
 async function recordPayment(station: StationContext, orderId: string, input: StationPaymentInput, meta: RequestMeta) {
+  // The attendant's PIN is checked first, outside the transaction, so a wrong PIN still counts toward the lockout.
+  await stationService.verifyActionPin(station, { attendantId: input.attendantId, pin: input.pin });
+
   const out = await db.transaction(async (tx) => {
     const att = await requireClockedIn(tx, station.branchId, input.attendantId);
     const order = await lockOrder(tx, station.branchId, orderId);
@@ -751,13 +760,13 @@ async function recordPayment(station: StationContext, orderId: string, input: St
     if (order.status === "cancelled") {
       throw new ConflictError("Cannot take payment for a cancelled order", "ORDER_CANCELLED");
     }
-    if (order.paymentStatus === "successful") {
+    if (order.paymentStatus === "paid") {
       throw new ConflictError("Order is already paid", "ORDER_ALREADY_PAID");
     }
 
     const amount = order.finalPricePesewas;
     const isCash = input.paymentMethod === "cash";
-    const status = isCash ? "successful" : "pending";
+    const status = isCash ? "paid" : "pending";
 
     let tendered: bigint | undefined;
     let change: bigint | undefined;
@@ -770,14 +779,17 @@ async function recordPayment(station: StationContext, orderId: string, input: St
     }
 
     const now = new Date();
-    const metadata = {
+    // Mobile money is paid in the Paystack popup. Each attempt gets its own reference, and the earlier ones
+    // are kept so a late confirmation for an abandoned attempt can still be matched.
+    const reference = isCash ? null : `WL-${order.orderNumber}-${randomBytes(4).toString("hex")}`;
+    const metadata: Record<string, unknown> = {
       attendantId: input.attendantId,
       attendanceId: att.attendanceId,
       ...(tendered !== undefined ? { tenderedPesewas: tendered.toString(), changePesewas: change!.toString() } : {}),
     };
 
     const [pending] = await tx
-      .select({ id: payments.id })
+      .select({ id: payments.id, gatewayReference: payments.gatewayReference, metadata: payments.metadata })
       .from(payments)
       .where(and(eq(payments.orderId, order.id), eq(payments.status, "pending")))
       .for("update")
@@ -785,9 +797,21 @@ async function recordPayment(station: StationContext, orderId: string, input: St
 
     let paymentId: string;
     if (pending) {
+      const prior = (((pending.metadata as any)?.previousReferences as string[] | undefined) ?? []).slice();
+      if (pending.gatewayReference && pending.gatewayReference !== reference) prior.push(pending.gatewayReference);
+      if (prior.length) metadata.previousReferences = prior;
       await tx
         .update(payments)
-        .set({ method: input.paymentMethod, status, amountPesewas: amount, paidAt: isCash ? now : null, metadata, updatedAt: now })
+        .set({
+          method: input.paymentMethod,
+          status,
+          amountPesewas: amount,
+          paidAt: isCash ? now : null,
+          gatewayReference: reference ?? pending.gatewayReference,
+          processedByAttendantId: input.attendantId,
+          metadata,
+          updatedAt: now,
+        })
         .where(eq(payments.id, pending.id));
       paymentId = pending.id;
     } else {
@@ -802,11 +826,16 @@ async function recordPayment(station: StationContext, orderId: string, input: St
           method: input.paymentMethod,
           status,
           paidAt: isCash ? now : null,
+          gatewayReference: reference,
+          processedByAttendantId: input.attendantId,
           metadata,
         })
         .returning({ id: payments.id });
       paymentId = row!.id;
     }
+
+    // Cash goes on the ledger in this same transaction, bucketed by the day it was paid.
+    if (isCash) await addCollected(tx, station.branchId, now, amount);
 
     await tx
       .update(orders)
@@ -822,7 +851,7 @@ async function recordPayment(station: StationContext, orderId: string, input: St
       ...(tendered !== undefined ? { tenderedPesewas: tendered.toString(), changePesewas: change!.toString() } : {}),
     });
 
-    return { paymentId, order, status, amount, change };
+    return { paymentId, order, status, amount, change, reference };
   });
 
   notifyBranch(station.branchId, "order.updated", { id: out.order.id, status: out.order.status });
@@ -835,10 +864,52 @@ async function recordPayment(station: StationContext, orderId: string, input: St
     status: out.status,
     amountPesewas: out.amount.toString(),
     ...(out.change !== undefined ? { changePesewas: out.change.toString() } : {}),
+    ...(out.reference
+      ? { reference: out.reference, publicKey: config.PAYSTACK_PUBLIC_KEY ?? null }
+      : {}),
   };
 }
 
+/**
+ * The popup said it worked. Don't take its word: ask Paystack, then settle. If the popup was closed
+ * or the network dropped, the attendant can call this again and the webhook is only a backup.
+ */
+async function finalizePayment(station: StationContext, orderId: string, reference: string) {
+  const [row] = await db
+    .select({ id: payments.id, status: payments.status, orderId: payments.orderId })
+    .from(payments)
+    .where(and(eq(payments.orderId, orderId), eq(payments.branchId, station.branchId), eq(payments.gatewayReference, reference)))
+    .limit(1);
+  // An earlier attempt's reference is also accepted, so a late confirmation of an abandoned popup still lands.
+  const found =
+    row ??
+    (
+      await db
+        .select({ id: payments.id, status: payments.status, orderId: payments.orderId })
+        .from(payments)
+        .where(
+          and(
+            eq(payments.orderId, orderId),
+            eq(payments.branchId, station.branchId),
+            sql`${payments.metadata} -> 'previousReferences' ? ${reference}`
+          )
+        )
+        .limit(1)
+    )[0];
+  if (!found) throw new NotFoundError("No payment with that reference for this order", "PAYMENT_NOT_FOUND");
+  if (found.status === "paid") return { status: "success", orderId, paymentStatus: "paid" };
+
+  const gateway = await paystack().verify(reference);
+  const res = await settleOrderPayment(reference, gateway, "finalize");
+  if (res.result === "mismatch") {
+    throw new ConflictError("Paystack amount does not match the order. It has been flagged for review.", "AMOUNT_MISMATCH");
+  }
+  if (res.result === "paid" || res.result === "already_paid") return { status: "success", orderId, paymentStatus: "paid" };
+  return { status: res.result === "not_successful" ? res.gatewayStatus : "unknown", orderId, paymentStatus: "pending" };
+}
+
 export const stationOrdersService = {
+  finalizePayment,
   searchCustomers,
   findOrCreateCustomer,
   listOrders,

@@ -256,6 +256,8 @@ export const stationPaymentInputSchema = z.object({
   /** Cash only: what the customer handed over. Must cover the amount due; the change is returned. */
   amountTenderedPesewas: z.string().regex(/^\d+$/, "Amount must be a whole number of pesewas").optional(),
   attendantId: z.string().uuid(),
+  /** The attendant's PIN, checked server-side before any money is recorded. */
+  pin,
 });
 
 export const stationPaymentResponseSchema = z.object({
@@ -266,6 +268,9 @@ export const stationPaymentResponseSchema = z.object({
   status: z.string(),
   amountPesewas: z.string(),
   changePesewas: z.string().optional(),
+  /** Mobile money only: open the Paystack popup with this reference and the amount, then call /payment/finalize. */
+  reference: z.string().optional(),
+  publicKey: z.string().nullable().optional(),
 });
 
 export type StationLoginInput = z.infer<typeof stationLoginSchema>;

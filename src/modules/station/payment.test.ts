@@ -11,6 +11,7 @@ import { attendanceLogs, attendants } from "../../platform/db/schema/staff.js";
 import type { StationContext } from "../../platform/auth/station.js";
 import { hashPin } from "../../platform/crypto/pin.js";
 import { buildApp } from "../../app.js";
+import { purgeCash } from "../cash/test-helpers.js";
 import { stationOrdersService as svc } from "./orders.service.js";
 
 if (!config.DATABASE_URL.includes("localhost")) {
@@ -85,6 +86,7 @@ afterAll(async () => {
   await db.delete(attendanceLogs).where(eq(attendanceLogs.branchId, branchId));
   await db.delete(attendants).where(eq(attendants.branchId, branchId));
   await db.delete(customers).where(eq(customers.id, customerId));
+  await purgeCash([branchId]);
   await db.delete(branches).where(eq(branches.id, branchId));
 });
 
@@ -95,17 +97,17 @@ describe("recordPayment", () => {
     const res = await svc.recordPayment(
       station,
       order.id,
-      { paymentMethod: "cash", attendantId: attId, amountTenderedPesewas: (due + 700n).toString() },
+      { paymentMethod: "cash", attendantId: attId, pin: "4321", amountTenderedPesewas: (due + 700n).toString() },
       meta
     );
-    expect(res).toMatchObject({ success: true, status: "successful", amountPesewas: due.toString(), changePesewas: "700" });
+    expect(res).toMatchObject({ success: true, status: "paid", amountPesewas: due.toString(), changePesewas: "700" });
 
     const [o] = await db.select().from(orders).where(eq(orders.id, order.id));
-    expect(o!.paymentStatus).toBe("successful");
+    expect(o!.paymentStatus).toBe("paid");
     expect(o!.paymentMethod).toBe("cash");
     const rows = await paymentsFor(order.id);
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.status).toBe("successful");
+    expect(rows[0]!.status).toBe("paid");
     expect(rows[0]!.paidAt).not.toBeNull();
     expect(rows[0]!.amountPesewas).toBe(due);
   });
@@ -116,7 +118,7 @@ describe("recordPayment", () => {
       svc.recordPayment(
         station,
         order.id,
-        { paymentMethod: "cash", attendantId: attId, amountTenderedPesewas: "1" },
+        { paymentMethod: "cash", attendantId: attId, pin: "4321", amountTenderedPesewas: "1" },
         meta
       )
     ).rejects.toMatchObject({ code: "INSUFFICIENT_TENDER" });
@@ -127,7 +129,7 @@ describe("recordPayment", () => {
 
   it("two simultaneous cash payments record exactly one", async () => {
     const order = await newOrder();
-    const attempt = () => svc.recordPayment(station, order.id, { paymentMethod: "cash", attendantId: attId }, meta);
+    const attempt = () => svc.recordPayment(station, order.id, { paymentMethod: "cash", attendantId: attId, pin: "4321" }, meta);
     const results = await Promise.allSettled([attempt(), attempt()]);
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
     const failed = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
@@ -137,17 +139,17 @@ describe("recordPayment", () => {
 
   it("refuses to pay an order twice", async () => {
     const order = await newOrder();
-    await svc.recordPayment(station, order.id, { paymentMethod: "cash", attendantId: attId }, meta);
+    await svc.recordPayment(station, order.id, { paymentMethod: "cash", attendantId: attId, pin: "4321" }, meta);
     await expect(
-      svc.recordPayment(station, order.id, { paymentMethod: "cash", attendantId: attId }, meta)
+      svc.recordPayment(station, order.id, { paymentMethod: "cash", attendantId: attId, pin: "4321" }, meta)
     ).rejects.toMatchObject({ statusCode: 409, code: "ORDER_ALREADY_PAID" });
   });
 
   it("mobile money stays pending, and retrying reuses the same payment row", async () => {
     const order = await newOrder();
-    const first = await svc.recordPayment(station, order.id, { paymentMethod: "mobile_money", attendantId: attId }, meta);
+    const first = await svc.recordPayment(station, order.id, { paymentMethod: "mobile_money", attendantId: attId, pin: "4321" }, meta);
     expect(first.status).toBe("pending");
-    const again = await svc.recordPayment(station, order.id, { paymentMethod: "mobile_money", attendantId: attId }, meta);
+    const again = await svc.recordPayment(station, order.id, { paymentMethod: "mobile_money", attendantId: attId, pin: "4321" }, meta);
     expect(again.paymentId).toBe(first.paymentId);
     expect(await paymentsFor(order.id)).toHaveLength(1);
     const [o] = await db.select().from(orders).where(eq(orders.id, order.id));
@@ -164,28 +166,28 @@ describe("recordPayment", () => {
       method: "mobile_money",
       status: "pending",
     });
-    await svc.recordPayment(station, order.id, { paymentMethod: "cash", attendantId: attId }, meta);
+    await svc.recordPayment(station, order.id, { paymentMethod: "cash", attendantId: attId, pin: "4321" }, meta);
     const rows = await paymentsFor(order.id);
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ method: "cash", status: "successful" });
+    expect(rows[0]).toMatchObject({ method: "cash", status: "paid" });
   });
 
   it("rejects cancelled orders, online orders, and attendants who are not clocked in", async () => {
     const cancelled = await newOrder();
     await db.update(orders).set({ status: "cancelled" }).where(eq(orders.id, cancelled.id));
     await expect(
-      svc.recordPayment(station, cancelled.id, { paymentMethod: "cash", attendantId: attId }, meta)
+      svc.recordPayment(station, cancelled.id, { paymentMethod: "cash", attendantId: attId, pin: "4321" }, meta)
     ).rejects.toMatchObject({ code: "ORDER_CANCELLED" });
 
     const online = await newOrder();
     await db.update(orders).set({ orderType: "online" }).where(eq(orders.id, online.id));
     await expect(
-      svc.recordPayment(station, online.id, { paymentMethod: "cash", attendantId: attId }, meta)
+      svc.recordPayment(station, online.id, { paymentMethod: "cash", attendantId: attId, pin: "4321" }, meta)
     ).rejects.toMatchObject({ code: "ORDER_NOT_WALK_IN" });
 
     const plain = await newOrder();
     await expect(
-      svc.recordPayment(station, plain.id, { paymentMethod: "cash", attendantId: idleAttId }, meta)
+      svc.recordPayment(station, plain.id, { paymentMethod: "cash", attendantId: idleAttId, pin: "4321" }, meta)
     ).rejects.toMatchObject({ code: "ATTENDANT_NOT_CLOCKED_IN" });
     expect(await paymentsFor(plain.id)).toHaveLength(0);
   });
@@ -223,11 +225,12 @@ describe("HTTP", () => {
         payload: {
           paymentMethod: "cash",
           attendantId: attId,
+          pin: "4321",
           amountTenderedPesewas: (order.finalPricePesewas + 100n).toString(),
         },
       });
       expect(ok.statusCode).toBe(200);
-      expect(ok.json()).toMatchObject({ success: true, status: "successful", changePesewas: "100" });
+      expect(ok.json()).toMatchObject({ success: true, status: "paid", changePesewas: "100" });
     } finally {
       await app.close();
     }

@@ -29,6 +29,20 @@
       "when": 1794830690473,
       "tag": "0003_operations_tables",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1794910596691,
+      "tag": "0004_payments_paid_status",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794910603697,
+      "tag": "0005_cash_ledger",
+      "breakpoints": true
     }
   ]
 }

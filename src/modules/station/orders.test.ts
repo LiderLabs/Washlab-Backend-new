@@ -298,7 +298,7 @@ describe("editing", () => {
 
   it("refuses to edit a paid order", async () => {
     const o = (await walkIn()).json();
-    await db.update(orders).set({ paymentStatus: "successful" }).where(eq(orders.id, o.id));
+    await db.update(orders).set({ paymentStatus: "paid" }).where(eq(orders.id, o.id));
     const r = await call(tokenA, "PATCH", `/orders/${o.id}`, { attendantId: attA, weightKg: 3 });
     expect(r.statusCode).toBe(409);
     expect(r.json().code).toBe("ORDER_PAID");

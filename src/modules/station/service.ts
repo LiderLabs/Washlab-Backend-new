@@ -476,7 +476,7 @@ async function getStats(station: StationContext, query: StationStatsQuery) {
   };
 
   for (const o of branchOrders) {
-    const isPaid = o.paymentStatus === "successful";
+    const isPaid = o.paymentStatus === "paid";
     if (isPaid) {
       totalRevenue += o.finalPricePesewas;
     }
