@@ -86,6 +86,12 @@ export class BranchService {
     return toBranchDto(branch);
   }
 
+  async getBranchByCode(code: string) {
+    const branch = await this.repo.findByCode(code);
+    if (!branch) throw new NotFoundError(`Branch with code ${code} not found`, "BRANCH_NOT_FOUND");
+    return toBranchDto(branch);
+  }
+
   async createBranch(input: CreateBranchInput, actor: Actor) {
     const stationPinHash = await hashSecret(input.stationPin);
 

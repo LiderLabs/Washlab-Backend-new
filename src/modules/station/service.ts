@@ -1,7 +1,14 @@
-import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
 import { db } from "../../platform/db/index.js";
 import { branches } from "../../platform/db/schema/branches.js";
 import { attendanceLogs, attendantBranches, attendants, stationSessions } from "../../platform/db/schema/staff.js";
+import { orders } from "../../platform/db/schema/orders.js";
+import { payments } from "../../platform/db/schema/payments.js";
+import { inventoryItems, notifications } from "../../platform/db/schema/operations.js";
+import { branchMachines, branchServices } from "../../platform/db/schema/catalog.js";
+import { auditLogs } from "../../platform/db/schema/infrastructure.js";
+import { customers } from "../../platform/db/schema/customers.js";
+import { broadcastRealtimeEvent } from "../../platform/realtime/index.js";
 import {
   AppError,
   BadRequestError,
@@ -17,7 +24,21 @@ import {
   STATION_SESSION_HOURS,
   StationContext,
 } from "../../platform/auth/station.js";
-import type { ClockInInput, ClockOutInput, StationLoginInput } from "./schemas.js";
+import type {
+  ClockInInput,
+  ClockOutInput,
+  CreateInventoryItemInput,
+  OrderInventoryInput,
+  ReceiveInventoryInput,
+  StationActivityQuery,
+  StationAttendanceHistoryQuery,
+  StationLoginInput,
+  StationPaymentInput,
+  StationStatsQuery,
+  StationTransactionsQuery,
+  UpdateStockInput,
+  VerifyAttendantPinInput,
+} from "./schemas.js";
 
 const STATION_PIN_MAX_ATTEMPTS = 10;
 const ATTENDANT_PIN_MAX_ATTEMPTS = 5;
@@ -394,6 +415,608 @@ async function clockOut(station: StationContext, input: ClockOutInput, meta: Req
   return { success: true, attendant: { name: attendant.name }, attendanceId: log.id };
 }
 
+// ---------- Station Info & Stats ----------
+
+async function getInfo(station: StationContext) {
+  const [b] = await db
+    .select()
+    .from(branches)
+    .where(and(eq(branches.id, station.branchId), isNull(branches.deletedAt)))
+    .limit(1);
+
+  if (!b) throw new NotFoundError("Branch not found", "BRANCH_NOT_FOUND");
+
+  return {
+    branchId: b.id,
+    branchName: b.name,
+    code: b.code,
+    address: b.address,
+    city: b.city,
+    phoneNumber: b.phoneNumber,
+    email: b.email,
+    pricingPerKgPesewas: b.pricingPerKgPesewas.toString(),
+    deliveryFeePesewas: b.deliveryFeePesewas.toString(),
+    terminalId: b.terminalId,
+    deviceId: station.deviceId,
+    loggedInAt: station.loggedInAt.toISOString(),
+  };
+}
+
+async function getStats(station: StationContext, query: StationStatsQuery) {
+  const start = query.startDate ? new Date(query.startDate) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const end = query.endDate ? new Date(query.endDate) : new Date();
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+
+  const branchOrders = await db
+    .select({
+      status: orders.status,
+      paymentStatus: orders.paymentStatus,
+      finalPricePesewas: orders.finalPricePesewas,
+      placedAt: orders.placedAt,
+    })
+    .from(orders)
+    .where(
+      and(
+        eq(orders.branchId, station.branchId),
+        isNull(orders.deletedAt),
+        gte(orders.placedAt, start),
+        lte(orders.placedAt, end)
+      )
+    );
+
+  let totalRevenue = 0n;
+  let todayRevenue = 0n;
+  let todayOrdersCount = 0;
+  const statusCounts = {
+    pending: 0,
+    in_progress: 0,
+    ready_for_pickup: 0,
+    delivered: 0,
+    completed: 0,
+    cancelled: 0,
+  };
+
+  for (const o of branchOrders) {
+    const isPaid = o.paymentStatus === "successful";
+    if (isPaid) {
+      totalRevenue += o.finalPricePesewas;
+    }
+    if (o.placedAt >= todayStart) {
+      todayOrdersCount++;
+      if (isPaid) todayRevenue += o.finalPricePesewas;
+    }
+
+    if (o.status === "pending_dropoff") statusCounts.pending++;
+    else if (["checked_in", "sorting", "washing", "drying", "folding"].includes(o.status)) statusCounts.in_progress++;
+    else if (o.status === "ready_for_pickup") statusCounts.ready_for_pickup++;
+    else if (["out_for_delivery", "delivered"].includes(o.status)) statusCounts.delivered++;
+    else if (o.status === "completed") statusCounts.completed++;
+    else if (o.status === "cancelled") statusCounts.cancelled++;
+  }
+
+  const activeAttendantsList = await activeAttendances(station.branchId);
+
+  return {
+    totalOrders: branchOrders.length,
+    totalRevenuePesewas: totalRevenue.toString(),
+    todayOrdersCount,
+    todayRevenuePesewas: todayRevenue.toString(),
+    activeAttendantsCount: activeAttendantsList.length,
+    ordersByStatus: statusCounts,
+  };
+}
+
+async function getTransactions(station: StationContext, query: StationTransactionsQuery) {
+  const conditions = [eq(payments.branchId, station.branchId)];
+  if (query.startDate) conditions.push(gte(payments.createdAt, new Date(query.startDate)));
+  if (query.endDate) conditions.push(lte(payments.createdAt, new Date(query.endDate)));
+
+  const rows = await db
+    .select({
+      payment: payments,
+      orderNumber: orders.orderNumber,
+      customerName: customers.name,
+      customerPhone: customers.phoneNumber,
+    })
+    .from(payments)
+    .leftJoin(orders, eq(orders.id, payments.orderId))
+    .leftJoin(customers, eq(customers.id, payments.customerId))
+    .where(and(...conditions))
+    .orderBy(desc(payments.createdAt))
+    .limit(query.limit);
+
+  return rows.map((r) => ({
+    id: r.payment.id,
+    orderId: r.payment.orderId,
+    orderNumber: r.orderNumber,
+    customerName: r.customerName,
+    customerPhoneNumber: r.customerPhone,
+    amountPesewas: r.payment.amountPesewas.toString(),
+    currency: r.payment.currency,
+    method: r.payment.method,
+    status: r.payment.status,
+    createdAt: r.payment.createdAt.toISOString(),
+  }));
+}
+
+async function getActivity(station: StationContext, query: StationActivityQuery) {
+  const rows = await db
+    .select()
+    .from(auditLogs)
+    .where(
+      sql`${auditLogs.changes}->>'branchId' = ${station.branchId} OR ${auditLogs.entityId} = ${station.branchId}`
+    )
+    .orderBy(desc(auditLogs.createdAt))
+    .limit(query.limit);
+
+  return rows.map((r) => ({
+    id: r.id,
+    action: r.action,
+    actorId: r.performedByUserId,
+    actorRole: r.performedByRole,
+    entityType: r.entityType,
+    entityId: r.entityId,
+    changes: r.changes,
+    createdAt: r.createdAt.toISOString(),
+  }));
+}
+
+async function getAttendanceHistory(station: StationContext, query: StationAttendanceHistoryQuery) {
+  const conditions = [eq(attendanceLogs.branchId, station.branchId)];
+  if (query.attendantId) conditions.push(eq(attendanceLogs.attendantId, query.attendantId));
+  if (query.startDate) conditions.push(gte(attendanceLogs.clockInAt, new Date(query.startDate)));
+  if (query.endDate) conditions.push(lte(attendanceLogs.clockInAt, new Date(query.endDate)));
+
+  const rows = await db
+    .select({
+      log: attendanceLogs,
+      attendantName: attendants.name,
+    })
+    .from(attendanceLogs)
+    .innerJoin(attendants, eq(attendants.id, attendanceLogs.attendantId))
+    .where(and(...conditions))
+    .orderBy(desc(attendanceLogs.clockInAt))
+    .limit(query.limit);
+
+  return rows.map((r) => {
+    const inTime = r.log.clockInAt.getTime();
+    const outTime = r.log.clockOutAt?.getTime();
+    const durationMinutes = outTime ? Math.round((outTime - inTime) / 60000) : null;
+    return {
+      id: r.log.id,
+      attendantId: r.log.attendantId,
+      attendantName: r.attendantName,
+      clockInAt: r.log.clockInAt.toISOString(),
+      clockOutAt: r.log.clockOutAt ? r.log.clockOutAt.toISOString() : null,
+      durationMinutes,
+      deviceId: r.log.deviceId,
+    };
+  });
+}
+
+async function verifyActionPin(station: StationContext, input: VerifyAttendantPinInput) {
+  const [attendant] = await db
+    .select()
+    .from(attendants)
+    .where(and(eq(attendants.id, input.attendantId), isNull(attendants.deletedAt)))
+    .limit(1);
+
+  if (!attendant || attendant.status !== "active") {
+    throw new NotFoundError("Attendant not found or inactive", "ATTENDANT_NOT_FOUND");
+  }
+
+  if (attendant.branchId !== station.branchId) {
+    const [extra] = await db
+      .select({ branchId: attendantBranches.branchId })
+      .from(attendantBranches)
+      .where(
+        and(eq(attendantBranches.attendantId, attendant.id), eq(attendantBranches.branchId, station.branchId))
+      )
+      .limit(1);
+    if (!extra) throw new BadRequestError("Attendant not assigned to this branch", "ATTENDANT_NOT_ASSIGNED");
+  }
+
+  await verifyAttendantPin(attendant, input.pin);
+
+  return {
+    success: true,
+    attendant: { id: attendant.id, name: attendant.name, email: attendant.email },
+  };
+}
+
+// ---------- Inventory ----------
+
+async function listInventory(station: StationContext) {
+  const items = await db
+    .select()
+    .from(inventoryItems)
+    .where(and(eq(inventoryItems.branchId, station.branchId), isNull(inventoryItems.deletedAt)))
+    .orderBy(asc(inventoryItems.name));
+
+  return items.map((i) => ({
+    id: i.id,
+    branchId: i.branchId,
+    name: i.name,
+    category: i.category,
+    unit: i.unit,
+    description: i.description,
+    currentStock: i.currentStock,
+    maxStock: i.maxStock,
+    minStock: i.minStock,
+    reorderPoint: i.reorderPoint,
+    status: i.status,
+    createdAt: i.createdAt.toISOString(),
+    updatedAt: i.updatedAt.toISOString(),
+  }));
+}
+
+async function createInventory(station: StationContext, input: CreateInventoryItemInput) {
+  const status =
+    input.currentStock <= input.minStock
+      ? "critical"
+      : input.currentStock <= input.reorderPoint
+        ? "low"
+        : "ok";
+
+  const [item] = await db
+    .insert(inventoryItems)
+    .values({
+      branchId: station.branchId,
+      name: input.name,
+      category: input.category,
+      unit: input.unit,
+      description: input.description,
+      currentStock: input.currentStock,
+      maxStock: input.maxStock,
+      minStock: input.minStock,
+      reorderPoint: input.reorderPoint,
+      status,
+    })
+    .returning();
+
+  return {
+    id: item!.id,
+    branchId: item!.branchId,
+    name: item!.name,
+    category: item!.category,
+    unit: item!.unit,
+    description: item!.description,
+    currentStock: item!.currentStock,
+    maxStock: item!.maxStock,
+    minStock: item!.minStock,
+    reorderPoint: item!.reorderPoint,
+    status: item!.status,
+    createdAt: item!.createdAt.toISOString(),
+    updatedAt: item!.updatedAt.toISOString(),
+  };
+}
+
+async function updateStock(station: StationContext, itemId: string, input: UpdateStockInput) {
+  const [item] = await db
+    .select()
+    .from(inventoryItems)
+    .where(
+      and(
+        eq(inventoryItems.id, itemId),
+        eq(inventoryItems.branchId, station.branchId),
+        isNull(inventoryItems.deletedAt)
+      )
+    )
+    .limit(1);
+
+  if (!item) throw new NotFoundError("Inventory item not found", "ITEM_NOT_FOUND");
+
+  const newStatus =
+    input.currentStock <= item.minStock
+      ? "critical"
+      : input.currentStock <= item.reorderPoint
+        ? "low"
+        : "ok";
+
+  const [updated] = await db
+    .update(inventoryItems)
+    .set({
+      currentStock: input.currentStock,
+      status: item.status === "ordered" && input.currentStock <= item.reorderPoint ? "ordered" : newStatus,
+      updatedAt: new Date(),
+    })
+    .where(eq(inventoryItems.id, itemId))
+    .returning();
+
+  return {
+    id: updated!.id,
+    branchId: updated!.branchId,
+    name: updated!.name,
+    category: updated!.category,
+    unit: updated!.unit,
+    description: updated!.description,
+    currentStock: updated!.currentStock,
+    maxStock: updated!.maxStock,
+    minStock: updated!.minStock,
+    reorderPoint: updated!.reorderPoint,
+    status: updated!.status,
+    createdAt: updated!.createdAt.toISOString(),
+    updatedAt: updated!.updatedAt.toISOString(),
+  };
+}
+
+async function orderInventory(station: StationContext, itemId: string, _input: OrderInventoryInput) {
+  const [item] = await db
+    .select()
+    .from(inventoryItems)
+    .where(
+      and(
+        eq(inventoryItems.id, itemId),
+        eq(inventoryItems.branchId, station.branchId),
+        isNull(inventoryItems.deletedAt)
+      )
+    )
+    .limit(1);
+
+  if (!item) throw new NotFoundError("Inventory item not found", "ITEM_NOT_FOUND");
+
+  const [updated] = await db
+    .update(inventoryItems)
+    .set({ status: "ordered", updatedAt: new Date() })
+    .where(eq(inventoryItems.id, itemId))
+    .returning();
+
+  return {
+    id: updated!.id,
+    branchId: updated!.branchId,
+    name: updated!.name,
+    category: updated!.category,
+    unit: updated!.unit,
+    description: updated!.description,
+    currentStock: updated!.currentStock,
+    maxStock: updated!.maxStock,
+    minStock: updated!.minStock,
+    reorderPoint: updated!.reorderPoint,
+    status: updated!.status,
+    createdAt: updated!.createdAt.toISOString(),
+    updatedAt: updated!.updatedAt.toISOString(),
+  };
+}
+
+async function receiveInventory(station: StationContext, itemId: string, input: ReceiveInventoryInput) {
+  const [item] = await db
+    .select()
+    .from(inventoryItems)
+    .where(
+      and(
+        eq(inventoryItems.id, itemId),
+        eq(inventoryItems.branchId, station.branchId),
+        isNull(inventoryItems.deletedAt)
+      )
+    )
+    .limit(1);
+
+  if (!item) throw new NotFoundError("Inventory item not found", "ITEM_NOT_FOUND");
+
+  const newStock = item.currentStock + input.receivedQuantity;
+  const newStatus =
+    newStock <= item.minStock ? "critical" : newStock <= item.reorderPoint ? "low" : "ok";
+
+  const [updated] = await db
+    .update(inventoryItems)
+    .set({ currentStock: newStock, status: newStatus, updatedAt: new Date() })
+    .where(eq(inventoryItems.id, itemId))
+    .returning();
+
+  return {
+    id: updated!.id,
+    branchId: updated!.branchId,
+    name: updated!.name,
+    category: updated!.category,
+    unit: updated!.unit,
+    description: updated!.description,
+    currentStock: updated!.currentStock,
+    maxStock: updated!.maxStock,
+    minStock: updated!.minStock,
+    reorderPoint: updated!.reorderPoint,
+    status: updated!.status,
+    createdAt: updated!.createdAt.toISOString(),
+    updatedAt: updated!.updatedAt.toISOString(),
+  };
+}
+
+// ---------- Notifications ----------
+
+async function listNotifications(station: StationContext) {
+  const rows = await db
+    .select()
+    .from(notifications)
+    .where(
+      and(
+        eq(notifications.branchId, station.branchId),
+        eq(notifications.recipientType, "station")
+      )
+    )
+    .orderBy(desc(notifications.createdAt))
+    .limit(50);
+
+  return rows.map((n) => ({
+    id: n.id,
+    title: n.title,
+    message: n.message,
+    type: n.type,
+    priority: n.priority,
+    entityType: n.entityType,
+    entityId: n.entityId,
+    isRead: n.isRead,
+    readAt: n.readAt ? n.readAt.toISOString() : null,
+    createdAt: n.createdAt.toISOString(),
+  }));
+}
+
+async function getUnreadNotificationCount(station: StationContext) {
+  const [result] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(notifications)
+    .where(
+      and(
+        eq(notifications.branchId, station.branchId),
+        eq(notifications.recipientType, "station"),
+        eq(notifications.isRead, false)
+      )
+    );
+
+  return { unreadCount: result?.count ?? 0 };
+}
+
+async function markNotificationRead(station: StationContext, id: string) {
+  await db
+    .update(notifications)
+    .set({ isRead: true, readAt: new Date() })
+    .where(and(eq(notifications.id, id), eq(notifications.branchId, station.branchId)));
+
+  return { success: true };
+}
+
+async function markAllNotificationsRead(station: StationContext) {
+  await db
+    .update(notifications)
+    .set({ isRead: true, readAt: new Date() })
+    .where(
+      and(
+        eq(notifications.branchId, station.branchId),
+        eq(notifications.recipientType, "station"),
+        eq(notifications.isRead, false)
+      )
+    );
+
+  return { success: true };
+}
+
+// ---------- Machines & Services ----------
+
+async function listMachines(station: StationContext) {
+  const rows = await db
+    .select()
+    .from(branchMachines)
+    .where(and(eq(branchMachines.branchId, station.branchId), isNull(branchMachines.deletedAt)))
+    .orderBy(asc(branchMachines.name));
+
+  return rows.map((m) => ({
+    id: m.id,
+    branchId: m.branchId,
+    name: m.name,
+    displayName: m.displayName,
+    serialNumber: m.serialNumber,
+    otherDetails: m.otherDetails,
+    washPricePesewas: m.washPricePesewas.toString(),
+    isActive: m.isActive,
+  }));
+}
+
+async function listServices(station: StationContext) {
+  const rows = await db
+    .select()
+    .from(branchServices)
+    .where(and(eq(branchServices.branchId, station.branchId), isNull(branchServices.deletedAt)))
+    .orderBy(asc(branchServices.name));
+
+  return rows.map((s) => ({
+    id: s.id,
+    branchId: s.branchId,
+    name: s.name,
+    code: s.code,
+    description: s.description,
+    imageUrl: s.imageUrl,
+    pricePesewas: s.pricePesewas.toString(),
+    extraWashPricePesewas: s.extraWashPricePesewas ? s.extraWashPricePesewas.toString() : null,
+    extraDryPricePesewas: s.extraDryPricePesewas ? s.extraDryPricePesewas.toString() : null,
+    isActive: s.isActive,
+  }));
+}
+
+// ---------- Payment Collection ----------
+
+async function recordOrderPayment(
+  station: StationContext,
+  orderId: string,
+  input: StationPaymentInput,
+  meta: RequestMeta
+) {
+  const [order] = await db
+    .select()
+    .from(orders)
+    .where(and(eq(orders.id, orderId), eq(orders.branchId, station.branchId), isNull(orders.deletedAt)))
+    .limit(1);
+
+  if (!order) throw new NotFoundError("Order not found", "ORDER_NOT_FOUND");
+  if (order.paymentStatus === "successful") {
+    throw new ConflictError("Order is already paid", "ORDER_ALREADY_PAID");
+  }
+
+  const isCash = input.paymentMethod === "cash";
+  const paymentStatus = isCash ? "successful" : "pending";
+
+  const paymentId = await db.transaction(async (tx) => {
+    const [paymentRow] = await tx
+      .insert(payments)
+      .values({
+        orderId: order.id,
+        branchId: station.branchId,
+        customerId: order.customerId,
+        amountPesewas: order.finalPricePesewas,
+        currency: "GHS",
+        method: input.paymentMethod,
+        status: paymentStatus,
+        paidAt: isCash ? new Date() : null,
+      })
+      .returning({ id: payments.id });
+
+    await tx
+      .update(orders)
+      .set({
+        paymentStatus: isCash ? "successful" : "pending",
+        paymentMethod: input.paymentMethod,
+        updatedAt: new Date(),
+      })
+      .where(eq(orders.id, order.id));
+
+    await writeAudit(tx, {
+      actorId: input.attendantId ?? station.deviceId,
+      actorRole: "attendant",
+      action: "orders.record_payment",
+      entityType: "payment",
+      entityId: paymentRow!.id,
+      changes: {
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        amountPesewas: order.finalPricePesewas.toString(),
+        method: input.paymentMethod,
+        status: paymentStatus,
+      },
+      ipAddress: meta.ip,
+      userAgent: meta.userAgent,
+    });
+
+    return paymentRow!.id;
+  });
+
+  broadcastRealtimeEvent(`branch:${station.branchId}`, {
+    type: "order.updated",
+    payload: {
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      paymentStatus: isCash ? "successful" : "pending",
+      paymentMethod: input.paymentMethod,
+    },
+  });
+
+  return {
+    success: true,
+    paymentId,
+    orderId: order.id,
+    orderNumber: order.orderNumber,
+    status: paymentStatus,
+    amountPesewas: order.finalPricePesewas.toString(),
+  };
+}
+
 export const stationService = {
   login,
   logout,
@@ -402,4 +1025,22 @@ export const stationService = {
   activeAttendances,
   clockIn,
   clockOut,
+  getInfo,
+  getStats,
+  getTransactions,
+  getActivity,
+  getAttendanceHistory,
+  verifyActionPin,
+  listInventory,
+  createInventory,
+  updateStock,
+  orderInventory,
+  receiveInventory,
+  listNotifications,
+  getUnreadNotificationCount,
+  markNotificationRead,
+  markAllNotificationsRead,
+  listMachines,
+  listServices,
+  recordOrderPayment,
 };

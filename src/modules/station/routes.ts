@@ -8,10 +8,30 @@ import {
   attendanceResultSchema,
   clockInSchema,
   clockOutSchema,
+  createInventoryItemSchema,
+  inventoryItemSchema,
+  orderInventorySchema,
+  receiveInventorySchema,
+  stationActivityLogSchema,
+  stationActivityQuerySchema,
+  stationAttendanceHistoryItemSchema,
+  stationAttendanceHistoryQuerySchema,
   stationAttendantSchema,
+  stationInfoResponseSchema,
   stationLoginResponseSchema,
   stationLoginSchema,
+  stationMachineSchema,
+  stationNotificationSchema,
+  stationServiceSchema,
   stationSessionResponseSchema,
+  stationStatsQuerySchema,
+  stationStatsResponseSchema,
+  stationTransactionsQuerySchema,
+  stationTransactionSchema,
+  stationUnreadCountResponseSchema,
+  updateStockSchema,
+  verifyAttendantPinResponseSchema,
+  verifyAttendantPinSchema,
 } from "./schemas.js";
 
 const meta = (req: FastifyRequest) => ({ ip: req.ip, userAgent: req.headers["user-agent"] });
@@ -25,6 +45,8 @@ const perStationLimit = {
   },
 };
 const security = [{ stationToken: [] }];
+const base = { onRequest: [authenticateStation], config: perStationLimit };
+const idParam = z.object({ id: z.string().uuid() });
 
 export async function stationRoutes(app: FastifyInstance) {
   const server = app.withTypeProvider<ZodTypeProvider>();
@@ -47,8 +69,7 @@ export async function stationRoutes(app: FastifyInstance) {
   server.post(
     "/logout",
     {
-      onRequest: [authenticateStation],
-      config: perStationLimit,
+      ...base,
       schema: {
         tags: ["Station"],
         summary: "End this station session",
@@ -62,8 +83,7 @@ export async function stationRoutes(app: FastifyInstance) {
   server.get(
     "/session",
     {
-      onRequest: [authenticateStation],
-      config: perStationLimit,
+      ...base,
       schema: {
         tags: ["Station"],
         summary: "Current station session and branch",
@@ -75,10 +95,68 @@ export async function stationRoutes(app: FastifyInstance) {
   );
 
   server.get(
+    "/info",
+    {
+      ...base,
+      schema: {
+        tags: ["Station"],
+        summary: "Station branch details, settings, and device info",
+        security,
+        response: { 200: stationInfoResponseSchema },
+      },
+    },
+    async (request) => stationService.getInfo(requireStation(request))
+  );
+
+  server.get(
+    "/stats",
+    {
+      ...base,
+      schema: {
+        tags: ["Station"],
+        summary: "Station analytics and order metrics for the shift/date range",
+        security,
+        querystring: stationStatsQuerySchema,
+        response: { 200: stationStatsResponseSchema },
+      },
+    },
+    async (request) => stationService.getStats(requireStation(request), request.query)
+  );
+
+  server.get(
+    "/transactions",
+    {
+      ...base,
+      schema: {
+        tags: ["Station"],
+        summary: "Recent payment transactions at this station",
+        security,
+        querystring: stationTransactionsQuerySchema,
+        response: { 200: z.array(stationTransactionSchema) },
+      },
+    },
+    async (request) => stationService.getTransactions(requireStation(request), request.query)
+  );
+
+  server.get(
+    "/activity",
+    {
+      ...base,
+      schema: {
+        tags: ["Station"],
+        summary: "Recent activity audit logs for this station",
+        security,
+        querystring: stationActivityQuerySchema,
+        response: { 200: z.array(stationActivityLogSchema) },
+      },
+    },
+    async (request) => stationService.getActivity(requireStation(request), request.query)
+  );
+
+  server.get(
     "/attendants",
     {
-      onRequest: [authenticateStation],
-      config: perStationLimit,
+      ...base,
       schema: {
         tags: ["Station"],
         summary: "Attendants who can clock in at this branch",
@@ -92,8 +170,7 @@ export async function stationRoutes(app: FastifyInstance) {
   server.get(
     "/attendance/active",
     {
-      onRequest: [authenticateStation],
-      config: perStationLimit,
+      ...base,
       schema: {
         tags: ["Station"],
         summary: "Attendants currently clocked in at this branch",
@@ -104,11 +181,25 @@ export async function stationRoutes(app: FastifyInstance) {
     async (request) => stationService.activeAttendances(requireStation(request).branchId)
   );
 
+  server.get(
+    "/attendance/history",
+    {
+      ...base,
+      schema: {
+        tags: ["Station"],
+        summary: "Station attendance history logs",
+        security,
+        querystring: stationAttendanceHistoryQuerySchema,
+        response: { 200: z.array(stationAttendanceHistoryItemSchema) },
+      },
+    },
+    async (request) => stationService.getAttendanceHistory(requireStation(request), request.query)
+  );
+
   server.post(
     "/attendance/clock-in",
     {
-      onRequest: [authenticateStation],
-      config: perStationLimit,
+      ...base,
       schema: {
         tags: ["Station"],
         summary: "Clock an attendant in with their PIN",
@@ -123,8 +214,7 @@ export async function stationRoutes(app: FastifyInstance) {
   server.post(
     "/attendance/clock-out",
     {
-      onRequest: [authenticateStation],
-      config: perStationLimit,
+      ...base,
       schema: {
         tags: ["Station"],
         summary: "Clock an attendant out with their PIN",
@@ -134,5 +224,188 @@ export async function stationRoutes(app: FastifyInstance) {
       },
     },
     async (request) => stationService.clockOut(requireStation(request), request.body, meta(request))
+  );
+
+  server.post(
+    "/verify-pin",
+    {
+      ...base,
+      schema: {
+        tags: ["Station"],
+        summary: "Verify an attendant PIN before critical action",
+        security,
+        body: verifyAttendantPinSchema,
+        response: { 200: verifyAttendantPinResponseSchema },
+      },
+    },
+    async (request) => stationService.verifyActionPin(requireStation(request), request.body)
+  );
+
+  // ---------- Inventory ----------
+
+  server.get(
+    "/inventory",
+    {
+      ...base,
+      schema: {
+        tags: ["Station"],
+        summary: "List inventory items for this branch",
+        security,
+        response: { 200: z.array(inventoryItemSchema) },
+      },
+    },
+    async (request) => stationService.listInventory(requireStation(request))
+  );
+
+  server.post(
+    "/inventory",
+    {
+      ...base,
+      schema: {
+        tags: ["Station"],
+        summary: "Create a new inventory item",
+        security,
+        body: createInventoryItemSchema,
+        response: { 200: inventoryItemSchema },
+      },
+    },
+    async (request) => stationService.createInventory(requireStation(request), request.body)
+  );
+
+  server.patch(
+    "/inventory/:id/stock",
+    {
+      ...base,
+      schema: {
+        tags: ["Station"],
+        summary: "Update current stock level for an inventory item",
+        security,
+        params: idParam,
+        body: updateStockSchema,
+        response: { 200: inventoryItemSchema },
+      },
+    },
+    async (request) => stationService.updateStock(requireStation(request), request.params.id, request.body)
+  );
+
+  server.post(
+    "/inventory/:id/order",
+    {
+      ...base,
+      schema: {
+        tags: ["Station"],
+        summary: "Record reorder for an inventory item",
+        security,
+        params: idParam,
+        body: orderInventorySchema,
+        response: { 200: inventoryItemSchema },
+      },
+    },
+    async (request) => stationService.orderInventory(requireStation(request), request.params.id, request.body)
+  );
+
+  server.post(
+    "/inventory/:id/receive",
+    {
+      ...base,
+      schema: {
+        tags: ["Station"],
+        summary: "Receive ordered stock for an inventory item",
+        security,
+        params: idParam,
+        body: receiveInventorySchema,
+        response: { 200: inventoryItemSchema },
+      },
+    },
+    async (request) => stationService.receiveInventory(requireStation(request), request.params.id, request.body)
+  );
+
+  // ---------- Notifications ----------
+
+  server.get(
+    "/notifications",
+    {
+      ...base,
+      schema: {
+        tags: ["Station"],
+        summary: "List notifications for this station",
+        security,
+        response: { 200: z.array(stationNotificationSchema) },
+      },
+    },
+    async (request) => stationService.listNotifications(requireStation(request))
+  );
+
+  server.get(
+    "/notifications/unread-count",
+    {
+      ...base,
+      schema: {
+        tags: ["Station"],
+        summary: "Get unread notifications count for this station",
+        security,
+        response: { 200: stationUnreadCountResponseSchema },
+      },
+    },
+    async (request) => stationService.getUnreadNotificationCount(requireStation(request))
+  );
+
+  server.post(
+    "/notifications/:id/read",
+    {
+      ...base,
+      schema: {
+        tags: ["Station"],
+        summary: "Mark notification as read",
+        security,
+        params: idParam,
+        response: { 200: z.object({ success: z.boolean() }) },
+      },
+    },
+    async (request) => stationService.markNotificationRead(requireStation(request), request.params.id)
+  );
+
+  server.post(
+    "/notifications/read-all",
+    {
+      ...base,
+      schema: {
+        tags: ["Station"],
+        summary: "Mark all notifications as read",
+        security,
+        response: { 200: z.object({ success: z.boolean() }) },
+      },
+    },
+    async (request) => stationService.markAllNotificationsRead(requireStation(request))
+  );
+
+  // ---------- Catalog (Machines & Services) ----------
+
+  server.get(
+    "/machines",
+    {
+      ...base,
+      schema: {
+        tags: ["Station"],
+        summary: "List active machines for this branch",
+        security,
+        response: { 200: z.array(stationMachineSchema) },
+      },
+    },
+    async (request) => stationService.listMachines(requireStation(request))
+  );
+
+  server.get(
+    "/services",
+    {
+      ...base,
+      schema: {
+        tags: ["Station"],
+        summary: "List active services for this branch",
+        security,
+        response: { 200: z.array(stationServiceSchema) },
+      },
+    },
+    async (request) => stationService.listServices(requireStation(request))
   );
 }

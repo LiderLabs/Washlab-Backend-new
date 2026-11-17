@@ -3,6 +3,8 @@ import { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { authenticateStation, requireStation, STATION_TOKEN_HEADER } from "../../platform/auth/station.js";
 import { stationOrdersService as svc } from "./orders.service.js";
+import { stationService } from "./service.js";
+import { stationPaymentInputSchema, stationPaymentResponseSchema } from "./schemas.js";
 import {
   cancelOrderSchema,
   checkInSchema,
@@ -192,5 +194,22 @@ export async function stationOrderRoutes(app: FastifyInstance) {
       },
     },
     async (request) => svc.cancelOnline(requireStation(request), request.params.id, request.body, meta(request))
+  );
+
+  server.post(
+    "/orders/:id/payment",
+    {
+      ...base,
+      schema: {
+        tags: ["Station orders"],
+        summary: "Record payment for an order at the station (cash or mobile money)",
+        security,
+        params: orderIdParams,
+        body: stationPaymentInputSchema,
+        response: { 200: stationPaymentResponseSchema },
+      },
+    },
+    async (request) =>
+      stationService.recordOrderPayment(requireStation(request), request.params.id, request.body, meta(request))
   );
 }

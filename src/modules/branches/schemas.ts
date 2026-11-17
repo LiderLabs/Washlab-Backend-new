@@ -13,6 +13,7 @@ export const branchDtoSchema = z.object({
   pricingPerKgPesewas: z.string(), // BigInt serialized as string for JSON safety
   deliveryFeePesewas: z.string(),
   requireStationLogin: z.boolean(),
+  hasStationPin: z.boolean().optional(),
   weeklyOrderTarget: z.number().nullable(),
   momoNumber: z.string().nullable(),
   isActive: z.boolean(),

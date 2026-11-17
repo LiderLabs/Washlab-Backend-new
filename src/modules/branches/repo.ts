@@ -54,6 +54,14 @@ export class BranchRepo {
     return rows[0] ?? null;
   }
 
+  async findByCode(code: string, executor: DbExecutor = db): Promise<BranchRow | null> {
+    const rows = await branchQuery(executor)
+      .where(and(eq(branches.code, code.trim().toUpperCase()), isNull(branches.deletedAt)))
+      .limit(1);
+
+    return rows[0] ?? null;
+  }
+
 
   async create(data: NewBranch, executor: DbExecutor = db): Promise<BranchRow> {
     const rows = await executor

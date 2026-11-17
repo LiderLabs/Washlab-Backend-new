@@ -21,6 +21,20 @@ export async function branchRoutes(app: FastifyInstance) {
     async () => branchService.listActiveBranches()
   );
 
+  // Get branch by code (public, safe DTO for station login)
+  server.get(
+    "/by-code/:code",
+    {
+      schema: {
+        tags: ["Branches"],
+        summary: "Get branch details by code",
+        params: z.object({ code: z.string().min(1).max(32) }),
+        response: { 200: branchDtoSchema },
+      },
+    },
+    async (request) => branchService.getBranchByCode(request.params.code)
+  );
+
   // Get one branch (public, safe DTO)
   server.get(
     "/:id",
