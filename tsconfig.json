@@ -5,6 +5,7 @@
     "lib": ["ES2020"],
     "moduleResolution": "node",
     "declaration": true,
+    "ignoreDeprecations": "6.0",
     "declarationMap": true,
     "sourceMap": true,
     "outDir": "./dist",
@@ -15,6 +16,7 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "noEmitOnError": false
+    
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "convex", "convex/**/*"]

@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, boolean, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, boolean, timestamp, uniqueIndex, integer } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { branches } from "./branches.js";
 
@@ -12,6 +12,7 @@ export const customers = pgTable(
     phoneNumber: varchar("phone_number", { length: 32 }).notNull(),
     email: varchar("email", { length: 255 }),
     branchId: uuid("branch_id").references(() => branches.id, { onDelete: "set null" }),
+    loyaltyPoints: integer("loyalty_points").notNull().default(0), // <-- ADDED THIS LINE
     isVerified: boolean("is_verified").notNull().default(false),
     anonymizedAt: timestamp("anonymized_at", { withTimezone: true }),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),

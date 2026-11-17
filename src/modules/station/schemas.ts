@@ -258,6 +258,9 @@ export const stationPaymentInputSchema = z.object({
   attendantId: z.string().uuid(),
   /** The attendant's PIN, checked server-side before any money is recorded. */
   pin,
+  // ── ADD THESE TWO LINES ──
+  voucherCode: z.string().optional(),
+  loyaltyPointsToRedeem: z.number().int().min(1).optional(),
 });
 
 export const stationPaymentResponseSchema = z.object({

@@ -16,6 +16,8 @@ import { randomBytes } from "node:crypto";
 import { stationService } from "./service.js";
 import { addCollected } from "../cash/ledger.js";
 import { settleOrderPayment } from "../payments/settle.js";
+import { vouchers, voucherUsages } from "../../platform/db/schema/vouchers.js";
+import { loyaltyLedgers } from "../../platform/db/schema/loyalty.js";
 import { paystack } from "../../platform/paystack/index.js";
 import { config } from "../../platform/config/index.js";
 import type { StationPaymentInput } from "./schemas.js";
@@ -764,7 +766,92 @@ async function recordPayment(station: StationContext, orderId: string, input: St
       throw new ConflictError("Order is already paid", "ORDER_ALREADY_PAID");
     }
 
-    const amount = order.finalPricePesewas;
+    // ── VOUCHER & LOYALTY LOGIC START ──
+    let amount = order.finalPricePesewas;
+    let discountApplied = 0n;
+
+    // 1. Handle Voucher
+    if (input.voucherCode) {
+      const [voucher] = await tx
+        .select()
+        .from(vouchers)
+        .where(and(eq(vouchers.code, input.voucherCode), eq(vouchers.isActive, true)))
+        .for("update");
+
+      if (!voucher) throw new BadRequestError("Invalid or expired voucher", "INVALID_VOUCHER");
+      if (voucher.usedCount >= voucher.usageLimit) throw new BadRequestError("Voucher usage limit reached", "VOUCHER_LIMIT");
+      if (voucher.branchId && voucher.branchId !== station.branchId) throw new BadRequestError("Voucher not valid for this branch", "VOUCHER_WRONG_BRANCH");
+
+      let vDiscount = 0n;
+      if (voucher.discountType === "fixed") {
+        vDiscount = BigInt(voucher.discountValue);
+      } else if (voucher.discountType === "percentage") {
+        vDiscount = (amount * BigInt(voucher.discountValue)) / 100n;
+      } else if (voucher.discountType === "free_wash") {
+        vDiscount = amount;
+      }
+
+      if (vDiscount > amount) vDiscount = amount;
+
+      discountApplied += vDiscount;
+      amount -= vDiscount;
+
+      await tx.update(vouchers).set({ usedCount: sql`${vouchers.usedCount} + 1` }).where(eq(vouchers.id, voucher.id));
+      await tx.insert(voucherUsages).values({
+        voucherId: voucher.id,
+        orderId: order.id,
+        customerId: order.customerId,
+        discountAmountPesewas: Number(vDiscount),
+      });
+    }
+
+    // 2. Handle Loyalty Points
+    if (input.loyaltyPointsToRedeem && input.loyaltyPointsToRedeem > 0) {
+      if (!order.customerId) throw new BadRequestError("Cannot redeem loyalty for guest orders", "NO_CUSTOMER");
+      
+      const [customer] = await tx
+        .select()
+        .from(customers)
+        .where(eq(customers.id, order.customerId))
+        .for("update");
+
+      if (!customer || customer.loyaltyPoints < input.loyaltyPointsToRedeem) {
+        throw new BadRequestError("Insufficient loyalty points", "INSUFFICIENT_POINTS");
+      }
+
+      let loyaltyDiscount = BigInt(input.loyaltyPointsToRedeem * 100); // 1 point = ₵1 = 100 pesewas
+      if (loyaltyDiscount > amount) loyaltyDiscount = amount; // Cap discount at remaining amount
+      
+      const pointsToDeduct = Number(loyaltyDiscount / 100n);
+
+      if (pointsToDeduct > 0) {
+        discountApplied += loyaltyDiscount;
+        amount -= loyaltyDiscount;
+
+        const newBalance = customer.loyaltyPoints - pointsToDeduct;
+        await tx.update(customers).set({ loyaltyPoints: newBalance }).where(eq(customers.id, customer.id));
+        
+        await tx.insert(loyaltyLedgers).values({
+          customerId: customer.id,
+          orderId: order.id,
+          type: "redeemed",
+          points: -pointsToDeduct,
+          balanceAfter: newBalance,
+          description: `Redeemed on order ${order.orderNumber}`,
+        });
+      }
+    }
+
+    // Apply the discount to the order row if any was applied
+    if (discountApplied > 0n) {
+      await tx.update(orders).set({
+        discountPesewas: order.discountPesewas + discountApplied,
+        finalPricePesewas: amount,
+        updatedAt: new Date()
+      }).where(eq(orders.id, order.id));
+    }
+    // ── VOUCHER & LOYALTY LOGIC END ──
+
     const isCash = input.paymentMethod === "cash";
     const status = isCash ? "paid" : "pending";
 
@@ -786,6 +873,7 @@ async function recordPayment(station: StationContext, orderId: string, input: St
       attendantId: input.attendantId,
       attendanceId: att.attendanceId,
       ...(tendered !== undefined ? { tenderedPesewas: tendered.toString(), changePesewas: change!.toString() } : {}),
+      ...(discountApplied > 0n ? { discountPesewas: discountApplied.toString() } : {}),
     };
 
     const [pending] = await tx
@@ -842,6 +930,22 @@ async function recordPayment(station: StationContext, orderId: string, input: St
       .set({ paymentStatus: status, paymentMethod: input.paymentMethod, updatedAt: now })
       .where(eq(orders.id, order.id));
 
+    // ── AWARD LOYALTY POINT FOR ORDER COMPLETION ──
+    if (isCash && order.customerId) {
+        const [customer] = await tx.select().from(customers).where(eq(customers.id, order.customerId)).for("update");
+        const newBalance = customer.loyaltyPoints + 1;
+        await tx.update(customers).set({ loyaltyPoints: newBalance }).where(eq(customers.id, customer.id));
+        await tx.insert(loyaltyLedgers).values({
+            customerId: customer.id,
+            orderId: order.id,
+            type: "earned",
+            points: 1,
+            balanceAfter: newBalance,
+            description: `Earned from order ${order.orderNumber}`,
+        });
+    }
+    // ────────────────────────────────────────────────
+
     await audit(tx, station, input.attendantId, meta, "order.payment_recorded", order.id, {
       paymentId,
       orderNumber: order.orderNumber,
@@ -849,6 +953,7 @@ async function recordPayment(station: StationContext, orderId: string, input: St
       status,
       amountPesewas: amount.toString(),
       ...(tendered !== undefined ? { tenderedPesewas: tendered.toString(), changePesewas: change!.toString() } : {}),
+      ...(discountApplied > 0n ? { discountPesewas: discountApplied.toString() } : {}),
     });
 
     return { paymentId, order, status, amount, change, reference };
@@ -869,56 +974,3 @@ async function recordPayment(station: StationContext, orderId: string, input: St
       : {}),
   };
 }
-
-/**
- * The popup said it worked. Don't take its word: ask Paystack, then settle. If the popup was closed
- * or the network dropped, the attendant can call this again and the webhook is only a backup.
- */
-async function finalizePayment(station: StationContext, orderId: string, reference: string) {
-  const [row] = await db
-    .select({ id: payments.id, status: payments.status, orderId: payments.orderId })
-    .from(payments)
-    .where(and(eq(payments.orderId, orderId), eq(payments.branchId, station.branchId), eq(payments.gatewayReference, reference)))
-    .limit(1);
-  // An earlier attempt's reference is also accepted, so a late confirmation of an abandoned popup still lands.
-  const found =
-    row ??
-    (
-      await db
-        .select({ id: payments.id, status: payments.status, orderId: payments.orderId })
-        .from(payments)
-        .where(
-          and(
-            eq(payments.orderId, orderId),
-            eq(payments.branchId, station.branchId),
-            sql`${payments.metadata} -> 'previousReferences' ? ${reference}`
-          )
-        )
-        .limit(1)
-    )[0];
-  if (!found) throw new NotFoundError("No payment with that reference for this order", "PAYMENT_NOT_FOUND");
-  if (found.status === "paid") return { status: "success", orderId, paymentStatus: "paid" };
-
-  const gateway = await paystack().verify(reference);
-  const res = await settleOrderPayment(reference, gateway, "finalize");
-  if (res.result === "mismatch") {
-    throw new ConflictError("Paystack amount does not match the order. It has been flagged for review.", "AMOUNT_MISMATCH");
-  }
-  if (res.result === "paid" || res.result === "already_paid") return { status: "success", orderId, paymentStatus: "paid" };
-  return { status: res.result === "not_successful" ? res.gatewayStatus : "unknown", orderId, paymentStatus: "pending" };
-}
-
-export const stationOrdersService = {
-  finalizePayment,
-  searchCustomers,
-  findOrCreateCustomer,
-  listOrders,
-  getOrder,
-  activeBagNumbers,
-  createWalkIn,
-  checkInOnline,
-  updateDetails,
-  updateStatus,
-  cancelOnline,
-  recordPayment,
-};
