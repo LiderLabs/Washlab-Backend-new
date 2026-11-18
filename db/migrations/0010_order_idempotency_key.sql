@@ -1,0 +1,2 @@
+ALTER TABLE "orders" ADD COLUMN "idempotency_key" varchar(64);--> statement-breakpoint
+CREATE UNIQUE INDEX "uq_orders_branch_idempotency" ON "orders" USING btree ("branch_id","idempotency_key") WHERE idempotency_key IS NOT NULL;

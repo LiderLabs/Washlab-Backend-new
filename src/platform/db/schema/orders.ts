@@ -44,6 +44,8 @@ export const orders = pgTable(
     orderType: orderTypeEnum("order_type").notNull().default("online"),
     serviceType: varchar("service_type", { length: 64 }).notNull().default("wash_and_dry"),
     bagNumber: varchar("bag_number", { length: 16 }),
+    // Sent by the tablet once per submit. A second request with the same key is the same order, not a new one.
+    idempotencyKey: varchar("idempotency_key", { length: 64 }),
     itemCount: integer("item_count"),
     estimatedLoads: integer("estimated_loads"),
     extraWashLoads: integer("extra_wash_loads").notNull().default(0),
@@ -80,6 +82,9 @@ export const orders = pgTable(
     index("idx_orders_customer_date").on(table.customerId, table.placedAt),
     index("idx_orders_branch_placed").on(table.branchId, table.placedAt.desc(), table.id.desc()).where(sql`deleted_at IS NULL`),
     // A bag number can only be on one live order per branch. Enforced here so two tablets can't race.
+    uniqueIndex("uq_orders_branch_idempotency")
+      .on(table.branchId, table.idempotencyKey)
+      .where(sql`idempotency_key IS NOT NULL`),
     uniqueIndex("idx_orders_active_bag")
       .on(table.branchId, table.bagNumber)
       .where(sql`bag_number IS NOT NULL AND deleted_at IS NULL AND status NOT IN ('completed','cancelled','delivered')`),
