@@ -3,7 +3,11 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-const isProd = process.env.NODE_ENV === "production";
+// Dev fallbacks apply ONLY when NODE_ENV is explicitly "development" or "test". A missing or unknown NODE_ENV is
+// treated like production: no fallbacks, and NODE_ENV itself is required. That way a forgotten variable can never
+// leave well-known dev secrets (like the Paystack webhook key) in charge of a live server.
+const useDevDefaults = process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test";
+const isProd = !useDevDefaults;
 
 // Dev-only fallbacks. In production none of these apply, so a missing value fails startup.
 const devDefaults: Record<string, string> = {
@@ -17,7 +21,9 @@ const devDefaults: Record<string, string> = {
 };
 
 const envSchema = z.object({
-  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  NODE_ENV: z.enum(["development", "test", "production"]),
+  /** How many reverse proxies sit in front of the API (1 = Traefik/Coolify only). Used to find the real client IP. */
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(1),
   PORT: z.coerce.number().default(4000),
   HOST: z.string().default("0.0.0.0"),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
@@ -57,7 +63,7 @@ const envSchema = z.object({
 export type Config = z.infer<typeof envSchema>;
 
 function loadConfig(): Config {
-  const source = isProd ? process.env : { ...devDefaults, ...process.env };
+  const source = useDevDefaults ? { ...devDefaults, ...process.env } : process.env;
   const result = envSchema.safeParse(source);
   if (!result.success) {
     // Print field names only, never values

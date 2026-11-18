@@ -27,6 +27,12 @@ export const inventoryItems = pgTable(
     minStock: integer("min_stock").notNull().default(0),
     reorderPoint: integer("reorder_point").notNull().default(0),
     status: inventoryStatusEnum("status").notNull().default("ok"),
+    // Open reorder, set while status = "ordered" and cleared when the delivery is received.
+    orderedAt: timestamp("ordered_at", { withTimezone: true }),
+    orderQuantity: integer("order_quantity"),
+    expectedArrivalDate: timestamp("expected_arrival_date", { withTimezone: true }),
+    arrivalDate: timestamp("arrival_date", { withTimezone: true }),
+    lastRestockedAt: timestamp("last_restocked_at", { withTimezone: true }),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

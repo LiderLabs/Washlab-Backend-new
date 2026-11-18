@@ -176,6 +176,11 @@ export const inventoryItemSchema = z.object({
   minStock: z.number(),
   reorderPoint: z.number(),
   status: z.string(),
+  orderedAt: z.string().nullable(),
+  orderQuantity: z.number().nullable(),
+  expectedArrivalDate: z.string().nullable(),
+  arrivalDate: z.string().nullable(),
+  lastRestockedAt: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -202,12 +207,45 @@ export const createInventoryItemSchema = z.object({
   reorderPoint: z.number().int().min(0).default(20),
 });
 
+/** Place an order for more stock. attendantId (optional) records who did it; they must be clocked in here. */
 export const orderInventorySchema = z.object({
   orderQuantity: z.number().int().min(1),
+  expectedArrivalDate: z.string().datetime().optional(),
+  attendantId: z.string().uuid().optional(),
 });
 
+/** Ask head office to reorder: notifies admins and marks the item as ordered. */
+export const requestInventoryOrderSchema = z.object({
+  notes: z.string().trim().max(500).optional(),
+  attendantId: z.string().uuid().optional(),
+});
+
+/** receivedQuantity defaults to the quantity that was ordered. */
 export const receiveInventorySchema = z.object({
-  receivedQuantity: z.number().int().min(1),
+  receivedQuantity: z.number().int().min(1).optional(),
+  attendantId: z.string().uuid().optional(),
+});
+
+export const successSchema = z.object({ success: z.boolean() });
+
+export const activeBranchSchema = z.object({ code: z.string(), name: z.string() });
+
+export const branchByCodeSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  code: z.string(),
+  address: z.string(),
+  city: z.string(),
+  phoneNumber: z.string(),
+  email: z.string().nullable(),
+  requireStationLogin: z.boolean(),
+  hasStationPin: z.boolean(),
+});
+
+export const customerLoyaltySchema = z.object({
+  points: z.number(),
+  totalEarned: z.number(),
+  totalRedeemed: z.number(),
 });
 
 export const stationNotificationSchema = z.object({
@@ -287,5 +325,6 @@ export type VerifyAttendantPinInput = z.infer<typeof verifyAttendantPinSchema>;
 export type UpdateStockInput = z.infer<typeof updateStockSchema>;
 export type CreateInventoryItemInput = z.infer<typeof createInventoryItemSchema>;
 export type OrderInventoryInput = z.infer<typeof orderInventorySchema>;
+export type RequestInventoryOrderInput = z.infer<typeof requestInventoryOrderSchema>;
 export type ReceiveInventoryInput = z.infer<typeof receiveInventorySchema>;
 export type StationPaymentInput = z.infer<typeof stationPaymentInputSchema>;

@@ -11,6 +11,10 @@ import {
   createInventoryItemSchema,
   inventoryItemSchema,
   orderInventorySchema,
+  requestInventoryOrderSchema,
+  successSchema,
+  activeBranchSchema,
+  branchByCodeSchema,
   receiveInventorySchema,
   stationActivityLogSchema,
   stationActivityQuerySchema,
@@ -50,6 +54,37 @@ const idParam = z.object({ id: z.string().uuid() });
 
 export async function stationRoutes(app: FastifyInstance) {
   const server = app.withTypeProvider<ZodTypeProvider>();
+
+  // The tablet needs these BEFORE it can log in (pick a branch, or type its code), so they are public.
+  // Only non-sensitive branch details are returned, and they are rate limited per IP.
+  const publicLimit = { rateLimit: { max: 60, timeWindow: "1 minute" } };
+
+  server.get(
+    "/branches",
+    {
+      config: publicLimit,
+      schema: {
+        tags: ["Station"],
+        summary: "Active branches (code and name) for the station login screen",
+        response: { 200: z.array(activeBranchSchema) },
+      },
+    },
+    async () => stationService.listActiveBranches()
+  );
+
+  server.get(
+    "/branches/by-code/:code",
+    {
+      config: publicLimit,
+      schema: {
+        tags: ["Station"],
+        summary: "Look up a branch by its code (case-insensitive) to start station login",
+        params: z.object({ code: z.string().trim().min(1).max(32) }),
+        response: { 200: branchByCodeSchema },
+      },
+    },
+    async (request) => stationService.getBranchByCode(request.params.code)
+  );
 
   server.post(
     "/login",
@@ -302,6 +337,22 @@ export async function stationRoutes(app: FastifyInstance) {
       },
     },
     async (request) => stationService.orderInventory(requireStation(request), request.params.id, request.body)
+  );
+
+  server.post(
+    "/inventory/:id/request-order",
+    {
+      ...base,
+      schema: {
+        tags: ["Station"],
+        summary: "Ask head office to reorder an item (notifies admins and marks it ordered)",
+        security,
+        params: idParam,
+        body: requestInventoryOrderSchema,
+        response: { 200: successSchema },
+      },
+    },
+    async (request) => stationService.requestInventoryOrder(requireStation(request), request.params.id, request.body)
   );
 
   server.post(

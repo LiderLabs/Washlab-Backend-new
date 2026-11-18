@@ -1047,6 +1047,26 @@ async function finalizePayment(station: StationContext, orderId: string, referen
   return { status: res.result === "not_successful" ? res.gatewayStatus : "unknown", orderId, paymentStatus: "pending" };
 }
 
+/** Points balance for a customer, shown to the attendant before taking payment. */
+async function getCustomerLoyalty(customerId: string) {
+  const [c] = await db
+    .select({ id: customers.id, points: customers.loyaltyPoints })
+    .from(customers)
+    .where(and(eq(customers.id, customerId), isNull(customers.deletedAt)))
+    .limit(1);
+  if (!c) throw new NotFoundError("Customer not found", "CUSTOMER_NOT_FOUND");
+
+  const [t] = await db
+    .select({
+      earned: sql<string>`COALESCE(SUM(CASE WHEN ${loyaltyLedger.pointsDelta} > 0 THEN ${loyaltyLedger.pointsDelta} ELSE 0 END), 0)`,
+      redeemed: sql<string>`COALESCE(-SUM(CASE WHEN ${loyaltyLedger.pointsDelta} < 0 THEN ${loyaltyLedger.pointsDelta} ELSE 0 END), 0)`,
+    })
+    .from(loyaltyLedger)
+    .where(eq(loyaltyLedger.customerId, c.id));
+
+  return { points: c.points, totalEarned: Number(t?.earned ?? 0), totalRedeemed: Number(t?.redeemed ?? 0) };
+}
+
 export const stationOrdersService = {
   finalizePayment,
   searchCustomers,
@@ -1060,4 +1080,5 @@ export const stationOrdersService = {
   updateStatus,
   cancelOnline,
   recordPayment,
+  getCustomerLoyalty,
 };
