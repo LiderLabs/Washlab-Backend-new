@@ -1225,6 +1225,36 @@ async function validateVoucher(
   };
 }
 
+async function listActiveVouchers(station: StationContext) {
+  const now = new Date();
+  const rows = await db
+    .select({
+      id: vouchers.id,
+      code: vouchers.code,
+      name: vouchers.name,
+      discountType: vouchers.discountType,
+      discountValue: vouchers.discountValue,
+    })
+    .from(vouchers)
+    .where(
+      and(
+        eq(vouchers.isActive, true),
+        or(isNull(vouchers.branchId), eq(vouchers.branchId, station.branchId)),
+        or(isNull(vouchers.expiresAt), sql`${vouchers.expiresAt} > ${now}`),
+        or(isNull(vouchers.validFrom), sql`${vouchers.validFrom} <= ${now}`)
+      )
+    );
+
+  return rows.map((v) => ({
+    _id: v.id,
+    id: v.id,
+    code: v.code,
+    name: v.name,
+    discountType: v.discountType,
+    discountValue: Number(v.discountValue),
+  }));
+}
+
 export const stationOrdersService = {
   finalizePayment,
   searchCustomers,
@@ -1240,4 +1270,5 @@ export const stationOrdersService = {
   recordPayment,
   getCustomerLoyalty,
   validateVoucher,
+  listActiveVouchers,
 };
