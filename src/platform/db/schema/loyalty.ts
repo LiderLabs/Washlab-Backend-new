@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, integer, timestamp, index, uniqueIndex, boolean, bigint } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, integer, timestamp, index, uniqueIndex, boolean, bigint, jsonb } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { customers } from "./customers.js";
 import { orders } from "./orders.js";
@@ -33,6 +33,9 @@ export const vouchers = pgTable(
     minOrderAmountPesewas: bigint("min_order_amount_pesewas", { mode: "bigint" }).notNull().default(sql`0`),
     maxUsageCount: integer("max_usage_count").default(1),
     currentUsageCount: integer("current_usage_count").notNull().default(0),
+    maxUsesPerCustomer: integer("max_uses_per_customer"),
+    validFrom: timestamp("valid_from", { withTimezone: true }),
+    applicableServices: jsonb("applicable_services").$type<string[]>(),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
     isActive: boolean("is_active").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -53,3 +56,6 @@ export const voucherUsages = pgTable(
     uniqueIndex("uq_voucher_order").on(table.voucherId, table.orderId),
   ]
 );
+
+export type Voucher = typeof vouchers.$inferSelect;
+export type NewVoucher = typeof vouchers.$inferInsert;

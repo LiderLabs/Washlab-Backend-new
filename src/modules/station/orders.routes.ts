@@ -5,7 +5,13 @@ import { authenticateStation, requireStation, STATION_TOKEN_HEADER } from "../..
 import { stationOrdersService as svc } from "./orders.service.js";
 import { finalizeBody, finalizeResponse } from "./cash.schemas.js";
 import { stationService } from "./service.js";
-import { customerLoyaltySchema, stationPaymentInputSchema, stationPaymentResponseSchema } from "./schemas.js";
+import {
+  customerLoyaltySchema,
+  stationPaymentInputSchema,
+  stationPaymentResponseSchema,
+  stationVoucherValidateInputSchema,
+  stationVoucherValidateResponseSchema,
+} from "./schemas.js";
 import {
   cancelOrderSchema,
   checkInSchema,
@@ -51,6 +57,21 @@ export async function stationOrderRoutes(app: FastifyInstance) {
       },
     },
     async (request) => svc.getCustomerLoyalty(request.params.id)
+  );
+
+  server.post(
+    "/vouchers/validate",
+    {
+      ...base,
+      schema: {
+        tags: ["Station orders"],
+        summary: "Validate a voucher code for station order payment",
+        security,
+        body: stationVoucherValidateInputSchema,
+        response: { 200: stationVoucherValidateResponseSchema },
+      },
+    },
+    async (request) => svc.validateVoucher(requireStation(request), request.body)
   );
 
   server.get(
