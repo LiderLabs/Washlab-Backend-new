@@ -30,11 +30,21 @@ export function tokensUsed(o: Pick<OrderRow, "serviceType" | "estimatedLoads" | 
 }
 
 async function awardLoyalty(tx: Tx, order: OrderRow) {
-  // One award per order, enforced by uq_order_loyalty_award.
-  await tx
+  if (!order.customerId) return;
+  // One award per order, enforced by uq_order_loyalty_award. The cached balance only moves when the
+  // ledger row is new, so a repeat can never add a second point.
+  const [awarded] = await tx
     .insert(loyaltyLedger)
     .values({ customerId: order.customerId, orderId: order.id, pointsDelta: 1, reason: "order_completed" })
-    .onConflictDoNothing();
+    .onConflictDoNothing()
+    .returning({ id: loyaltyLedger.id });
+  if (!awarded) return;
+  const [c] = await tx
+    .update(customers)
+    .set({ loyaltyPoints: sql`${customers.loyaltyPoints} + 1` })
+    .where(eq(customers.id, order.customerId))
+    .returning({ balance: customers.loyaltyPoints });
+  await tx.update(loyaltyLedger).set({ balanceAfter: c!.balance }).where(eq(loyaltyLedger.id, awarded.id));
 }
 
 async function deductInventory(tx: Tx, order: OrderRow) {
