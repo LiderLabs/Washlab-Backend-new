@@ -75,6 +75,19 @@ export async function stationOrderRoutes(app: FastifyInstance) {
   );
 
   server.get(
+    "/vouchers/active",
+    {
+      ...base,
+      schema: {
+        tags: ["Station orders"],
+        summary: "Get active vouchers for station datalist autocomplete",
+        security,
+      },
+    },
+    async (request) => svc.listActiveVouchers(requireStation(request))
+  );
+
+  server.get(
     "/customers/search",
     {
       ...base,
