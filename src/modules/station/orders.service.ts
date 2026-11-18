@@ -826,6 +826,9 @@ async function recordPayment(station: StationContext, orderId: string, input: St
       // A mobile-money retry sends the same code again. It is already counted and already in the price.
       const alreadyApplied = Boolean(already);
       if (!alreadyApplied) {
+        if (voucher.validFrom && voucher.validFrom.getTime() > Date.now()) {
+          throw new BadRequestError("This voucher is not yet valid", "VOUCHER_NOT_YET_VALID");
+        }
         if (voucher.expiresAt && voucher.expiresAt.getTime() < Date.now()) {
           throw new BadRequestError("This voucher has expired", "VOUCHER_EXPIRED");
         }
@@ -834,6 +837,28 @@ async function recordPayment(station: StationContext, orderId: string, input: St
         }
         if (amount < voucher.minOrderAmountPesewas) {
           throw new BadRequestError("Order is below the voucher's minimum", "VOUCHER_MIN_ORDER");
+        }
+        if (
+          voucher.applicableServices &&
+          Array.isArray(voucher.applicableServices) &&
+          voucher.applicableServices.length > 0 &&
+          !voucher.applicableServices.includes(order.serviceType)
+        ) {
+          throw new BadRequestError("Voucher not valid for this service type", "VOUCHER_WRONG_SERVICE");
+        }
+        if (voucher.maxUsesPerCustomer !== null && order.customerId) {
+          const [custUsage] = await tx
+            .select({ count: sql<number>`count(*)::int` })
+            .from(voucherUsages)
+            .where(
+              and(
+                eq(voucherUsages.voucherId, voucher.id),
+                eq(voucherUsages.customerId, order.customerId)
+              )
+            );
+          if (custUsage && custUsage.count >= voucher.maxUsesPerCustomer) {
+            throw new BadRequestError("Customer has reached the usage limit for this voucher", "VOUCHER_CUSTOMER_LIMIT");
+          }
         }
       }
 
@@ -864,16 +889,36 @@ async function recordPayment(station: StationContext, orderId: string, input: St
 
     if (input.loyaltyPointsToRedeem && input.loyaltyPointsToRedeem > 0) {
       if (!order.customerId) throw new BadRequestError("Cannot redeem loyalty for guest orders", "NO_CUSTOMER");
+      if (input.loyaltyPointsToRedeem % 10 !== 0) {
+        throw new BadRequestError(
+          "Loyalty points must be redeemed in multiples of 10 (10 points = 1 free load)",
+          "INVALID_LOYALTY_MULTIPLE"
+        );
+      }
 
       const [customer] = await tx.select().from(customers).where(eq(customers.id, order.customerId)).for("update");
       if (!customer || customer.loyaltyPoints < input.loyaltyPointsToRedeem) {
         throw new BadRequestError("Insufficient loyalty points", "INSUFFICIENT_POINTS");
       }
 
-      // 1 point = GH₵1 = 100 pesewas. Never take more than what is still owed, and only whole points.
-      const wanted = BigInt(input.loyaltyPointsToRedeem) * 100n;
-      const loyaltyDiscount = ((wanted > amount ? amount : wanted) / 100n) * 100n;
-      const pointsToDeduct = Number(loyaltyDiscount / 100n);
+      // Rule: 10 points = 1 free load based on the service's price (branchServices.pricePesewas), NOT 1 point = ₵1.
+      const [svc] = await tx
+        .select({ pricePesewas: branchServices.pricePesewas })
+        .from(branchServices)
+        .where(
+          and(
+            eq(branchServices.branchId, order.branchId),
+            eq(branchServices.code, order.serviceType),
+            isNull(branchServices.deletedAt)
+          )
+        )
+        .limit(1);
+
+      const loadPricePesewas = svc ? svc.pricePesewas : 2500n;
+      const freeLoads = Math.floor(input.loyaltyPointsToRedeem / 10);
+      const wantedDiscount = BigInt(freeLoads) * loadPricePesewas;
+      const loyaltyDiscount = wantedDiscount > amount ? amount : wantedDiscount;
+      const pointsToDeduct = input.loyaltyPointsToRedeem;
 
       if (pointsToDeduct > 0) {
         discountApplied += loyaltyDiscount;
@@ -1067,6 +1112,119 @@ async function getCustomerLoyalty(customerId: string) {
   return { points: c.points, totalEarned: Number(t?.earned ?? 0), totalRedeemed: Number(t?.redeemed ?? 0) };
 }
 
+async function validateVoucher(
+  station: StationContext,
+  input: {
+    code: string;
+    orderTotalPesewas?: number;
+    orderTotal?: number;
+    serviceType?: string;
+    customerId?: string;
+    orderId?: string;
+  }
+) {
+  const code = input.code.trim().toUpperCase();
+  const [voucher] = await db
+    .select()
+    .from(vouchers)
+    .where(and(eq(sql`UPPER(${vouchers.code})`, code), eq(vouchers.isActive, true)))
+    .limit(1);
+
+  if (!voucher) {
+    return { valid: false, error: "Voucher not found or inactive" };
+  }
+
+  const now = new Date();
+  if (voucher.validFrom && voucher.validFrom > now) {
+    return { valid: false, error: "This voucher is not yet valid" };
+  }
+  if (voucher.expiresAt && voucher.expiresAt < now) {
+    return { valid: false, error: "This voucher has expired" };
+  }
+  if (voucher.branchId && voucher.branchId !== station.branchId) {
+    return { valid: false, error: "Voucher is not valid for this branch" };
+  }
+  if (voucher.maxUsageCount !== null && voucher.currentUsageCount >= voucher.maxUsageCount) {
+    return { valid: false, error: "Voucher usage limit reached" };
+  }
+
+  if (
+    input.serviceType &&
+    voucher.applicableServices &&
+    Array.isArray(voucher.applicableServices) &&
+    voucher.applicableServices.length > 0 &&
+    !voucher.applicableServices.includes(input.serviceType)
+  ) {
+    return { valid: false, error: "Voucher is not valid for this service type" };
+  }
+
+  if (voucher.maxUsesPerCustomer !== null && input.customerId) {
+    const [custUsage] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(voucherUsages)
+      .where(
+        and(
+          eq(voucherUsages.voucherId, voucher.id),
+          eq(voucherUsages.customerId, input.customerId)
+        )
+      );
+    if (custUsage && custUsage.count >= voucher.maxUsesPerCustomer) {
+      return { valid: false, error: "Customer has reached the usage limit for this voucher" };
+    }
+  }
+
+  let totalPesewas = input.orderTotalPesewas ?? (input.orderTotal ? Math.round(input.orderTotal * 100) : 0);
+  if (totalPesewas <= 0 && input.orderId) {
+    const [ord] = await db
+      .select({ finalPricePesewas: orders.finalPricePesewas })
+      .from(orders)
+      .where(eq(orders.id, input.orderId))
+      .limit(1);
+    if (ord) totalPesewas = Number(ord.finalPricePesewas);
+  }
+
+  const minOrderPesewas = Number(voucher.minOrderAmountPesewas || 0n);
+  if (minOrderPesewas > 0 && totalPesewas > 0 && totalPesewas < minOrderPesewas) {
+    return {
+      valid: false,
+      error: `Minimum order value of GHS ${(minOrderPesewas / 100).toFixed(2)} required`,
+    };
+  }
+
+  let discountPesewas = 0;
+  if (voucher.discountType === "free_wash") {
+    discountPesewas = totalPesewas > 0 ? totalPesewas : 2500;
+  } else if (voucher.discountType === "percentage") {
+    const pct = Number(voucher.discountValue);
+    discountPesewas = Math.round((totalPesewas * pct) / 100);
+  } else if (voucher.discountType === "fixed") {
+    discountPesewas = Number(voucher.discountValue);
+  }
+
+  if (totalPesewas > 0) {
+    discountPesewas = Math.min(discountPesewas, totalPesewas);
+  }
+
+  const discountAmount = discountPesewas / 100;
+  const finalPricePesewas = Math.max(0, totalPesewas - discountPesewas);
+  const finalPrice = finalPricePesewas / 100;
+
+  return {
+    valid: true,
+    voucher: {
+      id: voucher.id,
+      code: voucher.code,
+      name: voucher.name,
+      discountType: voucher.discountType,
+      discountValue: Number(voucher.discountValue),
+    },
+    discountAmountPesewas: discountPesewas,
+    discountAmount,
+    finalPricePesewas,
+    finalPrice,
+  };
+}
+
 export const stationOrdersService = {
   finalizePayment,
   searchCustomers,
@@ -1081,4 +1239,5 @@ export const stationOrdersService = {
   cancelOnline,
   recordPayment,
   getCustomerLoyalty,
+  validateVoucher,
 };

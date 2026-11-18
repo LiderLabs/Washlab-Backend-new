@@ -49,6 +49,22 @@ export async function branchRoutes(app: FastifyInstance) {
     async (request) => branchService.getBranchById(request.params.id)
   );
 
+  // Get active services for a branch (public)
+  server.get(
+    "/:id/services",
+    {
+      schema: {
+        tags: ["Branches"],
+        summary: "Get active services configured for this branch",
+        params: z.object({ id: z.string().uuid() }),
+      },
+    },
+    async (request) => {
+      const { catalogService } = await import("../catalog/service.js");
+      return catalogService.getBranchServices(request.params.id);
+    }
+  );
+
   // Create branch
   server.post(
     "/",

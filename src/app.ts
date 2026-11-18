@@ -10,6 +10,9 @@ import { globalErrorHandler } from "./platform/errors/index.js";
 import { checkDbConnection } from "./platform/db/index.js";
 import { handleSseConnection } from "./platform/realtime/index.js";
 import { branchRoutes } from "./modules/branches/routes.js";
+import { customerRoutes } from "./modules/customers/routes.js";
+import { catalogRoutes } from "./modules/catalog/routes.js";
+import { voucherRoutes } from "./modules/vouchers/routes.js";
 import { orderRoutes } from "./modules/orders/routes.js";
 import { paymentRoutes } from "./modules/payments/routes.js";
 import { stationRoutes } from "./modules/station/routes.js";
@@ -153,6 +156,9 @@ export async function buildApp() {
 
   // Register domain modules under /v1
   await app.register(branchRoutes, { prefix: "/v1/branches" });
+  await app.register(customerRoutes, { prefix: "/v1/customers" });
+  await app.register(catalogRoutes, { prefix: "/v1/services" });
+  await app.register(voucherRoutes, { prefix: "/v1/vouchers" });
   await app.register(orderRoutes, { prefix: "/v1/orders" });
   await app.register(paymentRoutes, { prefix: "/v1/payments" });
   await app.register(stationRoutes, { prefix: "/v1/station" });

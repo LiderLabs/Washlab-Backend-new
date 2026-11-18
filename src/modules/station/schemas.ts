@@ -296,9 +296,41 @@ export const stationPaymentInputSchema = z.object({
   attendantId: z.string().uuid(),
   /** The attendant's PIN, checked server-side before any money is recorded. */
   pin,
-  // ── ADD THESE TWO LINES ──
+  // ── Voucher and loyalty redemption ──
   voucherCode: z.string().optional(),
-  loyaltyPointsToRedeem: z.number().int().min(1).optional(),
+  loyaltyPointsToRedeem: z
+    .number()
+    .int()
+    .min(10, "Minimum redemption is 10 points (1 free load)")
+    .refine((n) => n % 10 === 0, { message: "Loyalty points must be redeemed in multiples of 10 (10 points = 1 free load)" })
+    .optional(),
+});
+
+export const stationVoucherValidateInputSchema = z.object({
+  code: z.string().trim().min(1),
+  orderTotalPesewas: z.coerce.number().optional(),
+  orderTotal: z.coerce.number().optional(),
+  serviceType: z.string().optional(),
+  customerId: z.string().uuid().optional(),
+  orderId: z.string().uuid().optional(),
+});
+
+export const stationVoucherValidateResponseSchema = z.object({
+  valid: z.boolean(),
+  voucher: z
+    .object({
+      id: z.string().uuid(),
+      code: z.string(),
+      name: z.string().nullable(),
+      discountType: z.string(),
+      discountValue: z.number(),
+    })
+    .optional(),
+  discountAmountPesewas: z.number().optional(),
+  discountAmount: z.number().optional(),
+  finalPricePesewas: z.number().optional(),
+  finalPrice: z.number().optional(),
+  error: z.string().optional(),
 });
 
 export const stationPaymentResponseSchema = z.object({

@@ -88,6 +88,28 @@ export async function authenticate(request: FastifyRequest) {
   request.user = await resolveUser(clerkUserId);
 }
 
+/** preHandler: optional token verification. If valid Bearer token is provided, populates request.user. If absent, proceeds without error. */
+export async function optionalAuthenticate(request: FastifyRequest) {
+  const header = request.headers.authorization;
+  if (!header || !header.startsWith("Bearer ")) {
+    return;
+  }
+  const token = header.slice(7).trim();
+  if (!token) return;
+
+  try {
+    const result: any = await verifyToken(token, { secretKey: config.CLERK_SECRET_KEY });
+    const payload = result?.data ?? result;
+    if (result?.errors?.length || !payload?.sub) {
+      return;
+    }
+    const clerkUserId = payload.sub as string;
+    request.user = await resolveUser(clerkUserId);
+  } catch (err) {
+    request.log.debug({ reason: (err as Error).message }, "Optional token verification skipped");
+  }
+}
+
 export function requireRole(...allowedRoles: Role[]) {
   return async (request: FastifyRequest) => {
     if (!request.user) throw new UnauthorizedError("User is not authenticated");
