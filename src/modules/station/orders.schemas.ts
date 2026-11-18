@@ -27,6 +27,12 @@ const attendantId = z.string().uuid();
 const loads = z.number().int().min(0).max(50);
 const weight = z.number().positive().max(500);
 
+/** Rejects extra loads that don't belong to the service (wash-only with dry extras, dry-only with wash extras). */
+const extrasMatchService = (v: { serviceType?: string; extraWashLoads?: number; extraDryLoads?: number }) =>
+  !(v.serviceType === "wash_only" && (v.extraDryLoads ?? 0) > 0) &&
+  !(v.serviceType === "dry_only" && (v.extraWashLoads ?? 0) > 0);
+const extrasMessage = { message: "Extra loads don't match the service type", path: ["extraWashLoads"] };
+
 export const customerSearchQuery = z.object({
   q: z.string().trim().min(2).max(64),
   limit: z.coerce.number().int().min(1).max(50).default(20),
@@ -38,7 +44,8 @@ export const createCustomerSchema = z.object({
   email: z.string().email().max(255).optional(),
 });
 
-export const walkInOrderSchema = z.object({
+export const walkInOrderSchema = z
+  .object({
   attendantId,
   customerId: z.string().uuid(),
   serviceType: z.string().trim().min(1).max(64),
@@ -55,9 +62,13 @@ export const walkInOrderSchema = z.object({
   extraWashLoads: loads.optional(),
   extraDryLoads: loads.optional(),
   machineId: z.string().uuid().optional(),
-});
+  /** Generated once per submit on the tablet. A repeat of the same key returns the first order instead of a second one. */
+  idempotencyKey: z.string().trim().min(8).max(64).optional(),
+  })
+  .refine(extrasMatchService, extrasMessage);
 
-export const checkInSchema = z.object({
+export const checkInSchema = z
+  .object({
   attendantId,
   weightKg: weight,
   bagNumber: bagNumberSchema,
@@ -67,9 +78,11 @@ export const checkInSchema = z.object({
   extraWashLoads: loads.optional(),
   extraDryLoads: loads.optional(),
   machineId: z.string().uuid().optional(),
-});
+  })
+  .refine(extrasMatchService, extrasMessage);
 
-export const updateOrderSchema = z.object({
+export const updateOrderSchema = z
+  .object({
   attendantId,
   serviceType: z.string().trim().min(1).max(64).optional(),
   weightKg: weight.optional(),
@@ -78,7 +91,8 @@ export const updateOrderSchema = z.object({
   bagNumber: bagNumberSchema.optional(),
   notes: z.string().max(1000).optional(),
   whitesSeparate: z.boolean().optional(),
-});
+  })
+  .refine(extrasMatchService, extrasMessage);
 
 export const updateStatusSchema = z.object({
   attendantId,

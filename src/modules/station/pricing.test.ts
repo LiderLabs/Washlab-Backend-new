@@ -63,14 +63,20 @@ describe("calculatePrice", () => {
   it("prices extra loads from the service's extra prices, else wash/dry prices", () => {
     const withOwn = calculatePrice({
       ...base,
-      services: { ...base.services, wash_only: p(3000, 2500, 1500) },
+      serviceType: "wash_and_dry",
+      services: { ...base.services, wash_and_dry: p(5000, 2500, 1500) },
       extraWashLoads: 2,
       extraDryLoads: 1,
     });
     expect(withOwn.extrasPesewas).toBe(2n * 2500n + 1500n);
 
-    const fallback = calculatePrice({ ...base, extraWashLoads: 2, extraDryLoads: 1 });
+    const fallback = calculatePrice({ ...base, serviceType: "wash_and_dry", extraWashLoads: 2, extraDryLoads: 1 });
     expect(fallback.extrasPesewas).toBe(2n * 3000n + 2000n);
+  });
+
+  it("ignores extras that don't belong to the service", () => {
+    expect(calculatePrice({ ...base, serviceType: "wash_only", extraWashLoads: 1, extraDryLoads: 5 }).extrasPesewas).toBe(3000n);
+    expect(calculatePrice({ ...base, serviceType: "dry_only", extraWashLoads: 5, extraDryLoads: 1 }).extrasPesewas).toBe(2000n);
   });
 
   it("never loses precision on large values", () => {

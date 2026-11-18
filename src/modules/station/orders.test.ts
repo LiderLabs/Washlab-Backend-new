@@ -170,14 +170,14 @@ describe("walk-in orders", () => {
 
   it("adds delivery fee and extra loads", async () => {
     const res = await walkIn({
-      serviceType: "wash_only",
+      serviceType: "wash_and_dry",
       weightKg: 5,
       isDelivery: true,
       extraWashLoads: 1,
       extraDryLoads: 2,
     });
-    // 1 load x 3000 + delivery 500 + extra wash 3000 + 2 extra dry x 2000
-    expect(res.json().finalPricePesewas).toBe(3000 + 500 + 3000 + 4000);
+    // 1 load x (wash 3000 + dry 2000) + delivery 500 + extra wash 3000 + 2 extra dry x 2000
+    expect(res.json().finalPricePesewas).toBe(5000 + 500 + 3000 + 4000);
   });
 
   it("generates unique order numbers", async () => {
@@ -288,12 +288,12 @@ describe("status changes", () => {
 
 describe("editing", () => {
   it("reprices when weight or extras change", async () => {
-    const o = (await walkIn({ serviceType: "wash_only", weightKg: 5 })).json();
-    expect(o.finalPricePesewas).toBe(3000);
+    const o = (await walkIn({ serviceType: "dry_only", weightKg: 5 })).json();
+    expect(o.finalPricePesewas).toBe(2000);
     const r = await call(tokenA, "PATCH", `/orders/${o.id}`, { attendantId: attA, weightKg: 17, extraDryLoads: 1 });
     expect(r.statusCode).toBe(200);
     expect(r.json().estimatedLoads).toBe(3);
-    expect(r.json().finalPricePesewas).toBe(3 * 3000 + 2000);
+    expect(r.json().finalPricePesewas).toBe(3 * 2000 + 2000);
   });
 
   it("refuses to edit a paid order", async () => {

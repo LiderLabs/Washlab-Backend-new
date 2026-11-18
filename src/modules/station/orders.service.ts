@@ -10,7 +10,7 @@ import { BadRequestError, ConflictError, NotFoundError } from "../../platform/er
 import { writeAudit, DbExecutor } from "../../platform/audit/index.js";
 import { broadcastRealtimeEvent } from "../../platform/realtime/index.js";
 import type { StationContext } from "../../platform/auth/station.js";
-import { calculatePrice, ServicePrices } from "./pricing.js";
+import { calculatePrice, cleanExtras, ServicePrices } from "./pricing.js";
 import { runCompletionEffects } from "./completion.js";
 import { randomBytes } from "node:crypto";
 import { stationService } from "./service.js";
@@ -403,7 +403,27 @@ async function activeBagNumbers(branchId: string) {
 
 // ---------- writes ----------
 
+/** The order a repeated idempotency key already produced, or null. A key reused for a different order is refused. */
+async function replayedOrder(station: StationContext, input: WalkInOrderInput) {
+  if (!input.idempotencyKey) return null;
+  const [row] = await db
+    .select({ order: orders, customer: customers })
+    .from(orders)
+    .innerJoin(customers, eq(customers.id, orders.customerId))
+    .where(and(eq(orders.branchId, station.branchId), eq(orders.idempotencyKey, input.idempotencyKey)))
+    .limit(1);
+  if (!row) return null;
+  if (row.order.customerId !== input.customerId || row.order.serviceType !== input.serviceType) {
+    throw new ConflictError("This idempotency key was already used for a different order", "IDEMPOTENCY_KEY_REUSED");
+  }
+  return toOrderDto(row.order, row.customer);
+}
+
 async function createWalkIn(station: StationContext, input: WalkInOrderInput, meta: RequestMeta) {
+  const replay = await replayedOrder(station, input);
+  if (replay) return replay;
+
+  const extras = cleanExtras(input.serviceType, input.extraWashLoads, input.extraDryLoads);
   let created: OrderRow;
   let customer: CustomerRow;
   try {
@@ -428,8 +448,8 @@ async function createWalkIn(station: StationContext, input: WalkInOrderInput, me
         branchFallbackPerLoadPesewas: branch.fallback,
         isDelivery: input.isDelivery ?? false,
         branchDeliveryFeePesewas: branch.deliveryFee,
-        extraWashLoads: input.extraWashLoads ?? 0,
-        extraDryLoads: input.extraDryLoads ?? 0,
+        extraWashLoads: extras.extraWashLoads,
+        extraDryLoads: extras.extraDryLoads,
       });
 
       const orderNumber = await nextOrderNumber(tx, branch.code);
@@ -444,11 +464,12 @@ async function createWalkIn(station: StationContext, input: WalkInOrderInput, me
           status: "checked_in",
           serviceType: input.serviceType,
           bagNumber: input.bagNumber,
+          idempotencyKey: input.idempotencyKey,
           weightKg: input.weightKg.toFixed(2),
           itemCount: input.itemCount ?? 1,
           estimatedLoads: price.loads,
-          extraWashLoads: input.extraWashLoads ?? 0,
-          extraDryLoads: input.extraDryLoads ?? 0,
+          extraWashLoads: extras.extraWashLoads,
+          extraDryLoads: extras.extraDryLoads,
           machineId: input.machineId,
           whitesSeparate: input.whitesSeparate ?? false,
           notes: input.notes,
@@ -484,6 +505,12 @@ async function createWalkIn(station: StationContext, input: WalkInOrderInput, me
       return { created: row!, customer: cust };
     }));
   } catch (err) {
+    // Two taps racing: one insert wins, the loser trips the key or the bag index. Either way the
+    // second request gets the first one's order back.
+    if (pgCode(err) === "23505" && input.idempotencyKey) {
+      const replay = await replayedOrder(station, input);
+      if (replay) return replay;
+    }
     translateBagConflict(err, input.bagNumber);
     throw err;
   }
@@ -504,6 +531,7 @@ async function checkInOnline(station: StationContext, orderId: string, input: Ch
       }
 
       const serviceType = input.serviceType ?? order.serviceType;
+      const extras = cleanExtras(serviceType, input.extraWashLoads, input.extraDryLoads);
       const { branch, services } = await loadBranchPricing(tx, station.branchId);
       const machinePesewas = await machinePrice(tx, station.branchId, input.machineId ?? order.machineId);
       const price = calculatePrice({
@@ -515,8 +543,8 @@ async function checkInOnline(station: StationContext, orderId: string, input: Ch
         branchFallbackPerLoadPesewas: branch.fallback,
         isDelivery: order.isDelivery,
         branchDeliveryFeePesewas: branch.deliveryFee,
-        extraWashLoads: input.extraWashLoads ?? 0,
-        extraDryLoads: input.extraDryLoads ?? 0,
+        extraWashLoads: extras.extraWashLoads,
+        extraDryLoads: extras.extraDryLoads,
       });
 
       const [row] = await tx
@@ -528,8 +556,8 @@ async function checkInOnline(station: StationContext, orderId: string, input: Ch
           weightKg: input.weightKg.toFixed(2),
           itemCount: input.itemCount ?? 1,
           estimatedLoads: price.loads,
-          extraWashLoads: input.extraWashLoads ?? 0,
-          extraDryLoads: input.extraDryLoads ?? 0,
+          extraWashLoads: extras.extraWashLoads,
+          extraDryLoads: extras.extraDryLoads,
           machineId: input.machineId ?? order.machineId,
           notes: input.notes ?? order.notes,
           basePricePesewas: price.basePricePesewas + price.extrasPesewas,
@@ -600,8 +628,13 @@ async function updateDetails(station: StationContext, orderId: string, input: Up
       const serviceType = input.serviceType ?? order.serviceType;
       const weightKg = input.weightKg ?? Number(order.weightKg ?? 0);
       if (weightKg <= 0) throw new BadRequestError("Order has no weight yet", "NO_WEIGHT");
-      const extraWash = input.extraWashLoads ?? order.extraWashLoads;
-      const extraDry = input.extraDryLoads ?? order.extraDryLoads;
+      // Cleaned against the service the order will have after this edit, so switching a wash-and-dry order to
+      // wash-only also drops the dry extras it was carrying.
+      const { extraWashLoads: extraWash, extraDryLoads: extraDry } = cleanExtras(
+        serviceType,
+        input.extraWashLoads ?? order.extraWashLoads,
+        input.extraDryLoads ?? order.extraDryLoads
+      );
 
       const { branch, services } = await loadBranchPricing(tx, station.branchId);
       const machinePesewas = await machinePrice(tx, station.branchId, order.machineId);
@@ -779,44 +812,54 @@ async function recordPayment(station: StationContext, orderId: string, input: St
         .for("update");
 
       if (!voucher) throw new BadRequestError("Invalid voucher", "INVALID_VOUCHER");
-      if (voucher.expiresAt && voucher.expiresAt.getTime() < Date.now()) {
-        throw new BadRequestError("This voucher has expired", "VOUCHER_EXPIRED");
-      }
-      if (voucher.maxUsageCount !== null && voucher.currentUsageCount >= voucher.maxUsageCount) {
-        throw new BadRequestError("Voucher usage limit reached", "VOUCHER_LIMIT");
-      }
       if (voucher.branchId && voucher.branchId !== station.branchId) {
         throw new BadRequestError("Voucher not valid for this branch", "VOUCHER_WRONG_BRANCH");
       }
-      if (amount < voucher.minOrderAmountPesewas) {
-        throw new BadRequestError("Order is below the voucher's minimum", "VOUCHER_MIN_ORDER");
-      }
       const [already] = await tx
-        .select({ id: voucherUsages.id })
+        .select({ id: voucherUsages.id, voucherId: voucherUsages.voucherId })
         .from(voucherUsages)
         .where(eq(voucherUsages.orderId, order.id))
         .limit(1);
-      if (already) throw new ConflictError("A voucher is already applied to this order", "VOUCHER_ALREADY_APPLIED");
+      if (already && already.voucherId !== voucher.id) {
+        throw new ConflictError("A different voucher is already applied to this order", "VOUCHER_ALREADY_APPLIED");
+      }
+      // A mobile-money retry sends the same code again. It is already counted and already in the price.
+      const alreadyApplied = Boolean(already);
+      if (!alreadyApplied) {
+        if (voucher.expiresAt && voucher.expiresAt.getTime() < Date.now()) {
+          throw new BadRequestError("This voucher has expired", "VOUCHER_EXPIRED");
+        }
+        if (voucher.maxUsageCount !== null && voucher.currentUsageCount >= voucher.maxUsageCount) {
+          throw new BadRequestError("Voucher usage limit reached", "VOUCHER_LIMIT");
+        }
+        if (amount < voucher.minOrderAmountPesewas) {
+          throw new BadRequestError("Order is below the voucher's minimum", "VOUCHER_MIN_ORDER");
+        }
+      }
 
       let vDiscount = 0n;
-      if (voucher.discountType === "fixed") vDiscount = voucher.discountValue;
+      if (alreadyApplied) {
+        // nothing to do: the discount is part of finalPricePesewas and the use is already counted
+      } else if (voucher.discountType === "fixed") vDiscount = voucher.discountValue;
       else if (voucher.discountType === "percentage") vDiscount = (amount * voucher.discountValue) / 100n;
       else if (voucher.discountType === "free_wash") vDiscount = amount;
       if (vDiscount > amount) vDiscount = amount;
 
-      discountApplied += vDiscount;
-      amount -= vDiscount;
+      if (!alreadyApplied) {
+        discountApplied += vDiscount;
+        amount -= vDiscount;
 
-      await tx
-        .update(vouchers)
-        .set({ currentUsageCount: sql`${vouchers.currentUsageCount} + 1` })
-        .where(eq(vouchers.id, voucher.id));
-      await tx.insert(voucherUsages).values({
-        voucherId: voucher.id,
-        orderId: order.id,
-        customerId: order.customerId,
-        discountAppliedPesewas: vDiscount,
-      });
+        await tx
+          .update(vouchers)
+          .set({ currentUsageCount: sql`${vouchers.currentUsageCount} + 1` })
+          .where(eq(vouchers.id, voucher.id));
+        await tx.insert(voucherUsages).values({
+          voucherId: voucher.id,
+          orderId: order.id,
+          customerId: order.customerId,
+          discountAppliedPesewas: vDiscount,
+        });
+      }
     }
 
     if (input.loyaltyPointsToRedeem && input.loyaltyPointsToRedeem > 0) {

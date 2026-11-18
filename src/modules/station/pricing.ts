@@ -42,6 +42,18 @@ export type PricingResult = {
 
 const STANDARD = new Set(["wash_and_dry", "wash_only", "dry_only"]);
 
+/**
+ * Extra loads only make sense for the part of the service that is being done: a wash-only order has no
+ * dry cycle to add to, and a dry-only order has no wash cycle. Anything else is dropped so a bad request
+ * (or an old stored value after the service type changes) can never inflate the price.
+ */
+export function cleanExtras(serviceType: string, extraWashLoads = 0, extraDryLoads = 0) {
+  return {
+    extraWashLoads: serviceType === "dry_only" ? 0 : extraWashLoads,
+    extraDryLoads: serviceType === "wash_only" ? 0 : extraDryLoads,
+  };
+}
+
 export function loadsForWeight(weightKg: number): number {
   return Math.ceil(weightKg / KG_PER_LOAD);
 }
@@ -64,7 +76,8 @@ export function calculatePrice(i: PricingInput): PricingResult {
 
   const extraWashUnit = svc?.extraWashPricePesewas ?? (STANDARD.has(i.serviceType) ? washUnit : perLoad);
   const extraDryUnit = svc?.extraDryPricePesewas ?? dryUnit;
-  const extrasPesewas = BigInt(i.extraWashLoads) * extraWashUnit + BigInt(i.extraDryLoads) * extraDryUnit;
+  const extras = cleanExtras(i.serviceType, i.extraWashLoads, i.extraDryLoads);
+  const extrasPesewas = BigInt(extras.extraWashLoads) * extraWashUnit + BigInt(extras.extraDryLoads) * extraDryUnit;
 
   const deliveryFeePesewas = i.isDelivery ? i.branchDeliveryFeePesewas : 0n;
   return {

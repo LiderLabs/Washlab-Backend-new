@@ -71,6 +71,13 @@
       "when": 1794996671625,
       "tag": "0009_restore_loyalty_vouchers",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1794996889047,
+      "tag": "0010_order_idempotency_key",
+      "breakpoints": true
     }
   ]
 }
