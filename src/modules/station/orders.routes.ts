@@ -5,7 +5,7 @@ import { authenticateStation, requireStation, STATION_TOKEN_HEADER } from "../..
 import { stationOrdersService as svc } from "./orders.service.js";
 import { finalizeBody, finalizeResponse } from "./cash.schemas.js";
 import { stationService } from "./service.js";
-import { stationPaymentInputSchema, stationPaymentResponseSchema } from "./schemas.js";
+import { customerLoyaltySchema, stationPaymentInputSchema, stationPaymentResponseSchema } from "./schemas.js";
 import {
   cancelOrderSchema,
   checkInSchema,
@@ -37,6 +37,21 @@ const base = { onRequest: [authenticateStation], config: perStationLimit };
 /** Attendant-app order endpoints. Mounted under /v1/station. All require the x-station-token header. */
 export async function stationOrderRoutes(app: FastifyInstance) {
   const server = app.withTypeProvider<ZodTypeProvider>();
+
+  server.get(
+    "/customers/:id/loyalty",
+    {
+      ...base,
+      schema: {
+        tags: ["Station orders"],
+        summary: "A customer's loyalty points (balance, earned, redeemed)",
+        security,
+        params: z.object({ id: z.string().uuid() }),
+        response: { 200: customerLoyaltySchema },
+      },
+    },
+    async (request) => svc.getCustomerLoyalty(request.params.id)
+  );
 
   server.get(
     "/customers/search",

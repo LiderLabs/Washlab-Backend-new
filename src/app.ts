@@ -25,7 +25,8 @@ export async function buildApp() {
   const app = fastify({
     loggerInstance: logger,
     disableRequestLogging: false,
-    trustProxy: true,
+    // Trust exactly N proxy hops, never "true": with true a client can send its own X-Forwarded-For and dodge rate limits.
+    trustProxy: (_address: string, hop: number) => hop < config.TRUST_PROXY_HOPS,
     bodyLimit: 1_048_576,
     requestIdHeader: "x-request-id",
   }).withTypeProvider<ZodTypeProvider>();

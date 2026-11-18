@@ -28,6 +28,7 @@ import type {
   ClockOutInput,
   CreateInventoryItemInput,
   OrderInventoryInput,
+  RequestInventoryOrderInput,
   ReceiveInventoryInput,
   StationActivityQuery,
   StationAttendanceHistoryQuery,
@@ -625,14 +626,12 @@ async function verifyActionPin(station: StationContext, input: VerifyAttendantPi
 
 // ---------- Inventory ----------
 
-async function listInventory(station: StationContext) {
-  const items = await db
-    .select()
-    .from(inventoryItems)
-    .where(and(eq(inventoryItems.branchId, station.branchId), isNull(inventoryItems.deletedAt)))
-    .orderBy(asc(inventoryItems.name));
 
-  return items.map((i) => ({
+type InventoryRow = typeof inventoryItems.$inferSelect;
+const iso = (d: Date | null) => (d ? d.toISOString() : null);
+
+function toInventoryDto(i: InventoryRow) {
+  return {
     id: i.id,
     branchId: i.branchId,
     name: i.name,
@@ -644,9 +643,62 @@ async function listInventory(station: StationContext) {
     minStock: i.minStock,
     reorderPoint: i.reorderPoint,
     status: i.status,
+    orderedAt: iso(i.orderedAt),
+    orderQuantity: i.orderQuantity,
+    expectedArrivalDate: iso(i.expectedArrivalDate),
+    arrivalDate: iso(i.arrivalDate),
+    lastRestockedAt: iso(i.lastRestockedAt),
     createdAt: i.createdAt.toISOString(),
     updatedAt: i.updatedAt.toISOString(),
-  }));
+  };
+}
+
+/**
+ * Who is doing an inventory action. With an attendantId they must be clocked in at this branch;
+ * without one the action is attributed to the station device (the old app allowed both).
+ */
+async function resolveInventoryActor(station: StationContext, attendantId?: string) {
+  if (!attendantId) return { actorId: `station:${station.sessionId}`, actorRole: "station", name: "An attendant" };
+  const [row] = await db
+    .select({ id: attendants.id, name: attendants.name })
+    .from(attendanceLogs)
+    .innerJoin(attendants, eq(attendants.id, attendanceLogs.attendantId))
+    .where(
+      and(
+        eq(attendanceLogs.attendantId, attendantId),
+        eq(attendanceLogs.branchId, station.branchId),
+        isNull(attendanceLogs.clockOutAt)
+      )
+    )
+    .limit(1);
+  if (!row) throw new BadRequestError("Attendant is not clocked in at this branch", "ATTENDANT_NOT_CLOCKED_IN");
+  return { actorId: row.id, actorRole: "attendant", name: row.name };
+}
+
+async function findBranchItem(station: StationContext, itemId: string) {
+  const [item] = await db
+    .select()
+    .from(inventoryItems)
+    .where(
+      and(eq(inventoryItems.id, itemId), eq(inventoryItems.branchId, station.branchId), isNull(inventoryItems.deletedAt))
+    )
+    .limit(1);
+  if (!item) throw new NotFoundError("Inventory item not found", "ITEM_NOT_FOUND");
+  return item;
+}
+
+function stockStatus(stock: number, min: number, reorder: number): "critical" | "low" | "ok" {
+  return stock <= min ? "critical" : stock <= reorder ? "low" : "ok";
+}
+
+async function listInventory(station: StationContext) {
+  const items = await db
+    .select()
+    .from(inventoryItems)
+    .where(and(eq(inventoryItems.branchId, station.branchId), isNull(inventoryItems.deletedAt)))
+    .orderBy(asc(inventoryItems.name));
+
+  return items.map((i) => (toInventoryDto(i)));
 }
 
 async function createInventory(station: StationContext, input: CreateInventoryItemInput) {
@@ -673,21 +725,7 @@ async function createInventory(station: StationContext, input: CreateInventoryIt
     })
     .returning();
 
-  return {
-    id: item!.id,
-    branchId: item!.branchId,
-    name: item!.name,
-    category: item!.category,
-    unit: item!.unit,
-    description: item!.description,
-    currentStock: item!.currentStock,
-    maxStock: item!.maxStock,
-    minStock: item!.minStock,
-    reorderPoint: item!.reorderPoint,
-    status: item!.status,
-    createdAt: item!.createdAt.toISOString(),
-    updatedAt: item!.updatedAt.toISOString(),
-  };
+  return toInventoryDto(item!);
 }
 
 async function updateStock(station: StationContext, itemId: string, input: UpdateStockInput) {
@@ -722,104 +760,128 @@ async function updateStock(station: StationContext, itemId: string, input: Updat
     .where(eq(inventoryItems.id, itemId))
     .returning();
 
-  return {
-    id: updated!.id,
-    branchId: updated!.branchId,
-    name: updated!.name,
-    category: updated!.category,
-    unit: updated!.unit,
-    description: updated!.description,
-    currentStock: updated!.currentStock,
-    maxStock: updated!.maxStock,
-    minStock: updated!.minStock,
-    reorderPoint: updated!.reorderPoint,
-    status: updated!.status,
-    createdAt: updated!.createdAt.toISOString(),
-    updatedAt: updated!.updatedAt.toISOString(),
-  };
+  return toInventoryDto(updated!);
 }
 
-async function orderInventory(station: StationContext, itemId: string, _input: OrderInventoryInput) {
-  const [item] = await db
-    .select()
-    .from(inventoryItems)
-    .where(
-      and(
-        eq(inventoryItems.id, itemId),
-        eq(inventoryItems.branchId, station.branchId),
-        isNull(inventoryItems.deletedAt)
-      )
-    )
-    .limit(1);
+async function orderInventory(station: StationContext, itemId: string, input: OrderInventoryInput) {
+  const item = await findBranchItem(station, itemId);
+  const actor = await resolveInventoryActor(station, input.attendantId);
+  const now = new Date();
 
-  if (!item) throw new NotFoundError("Inventory item not found", "ITEM_NOT_FOUND");
+  const updated = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .update(inventoryItems)
+      .set({
+        status: "ordered",
+        orderedAt: now,
+        orderQuantity: input.orderQuantity,
+        expectedArrivalDate: input.expectedArrivalDate ? new Date(input.expectedArrivalDate) : null,
+        updatedAt: now,
+      })
+      .where(eq(inventoryItems.id, item.id))
+      .returning();
+    await writeAudit(tx, {
+      actorId: actor.actorId,
+      actorRole: actor.actorRole,
+      action: "inventory.order_placed",
+      entityType: "inventory_item",
+      entityId: item.id,
+      changes: {
+        branchId: station.branchId,
+        itemName: item.name,
+        orderQuantity: input.orderQuantity,
+        expectedArrivalDate: input.expectedArrivalDate ?? null,
+      },
+    });
+    return row!;
+  });
+  return toInventoryDto(updated);
+}
 
-  const [updated] = await db
-    .update(inventoryItems)
-    .set({ status: "ordered", updatedAt: new Date() })
-    .where(eq(inventoryItems.id, itemId))
-    .returning();
+async function requestInventoryOrder(station: StationContext, itemId: string, input: RequestInventoryOrderInput) {
+  const item = await findBranchItem(station, itemId);
+  const actor = await resolveInventoryActor(station, input.attendantId);
+  const [branch] = await db.select({ name: branches.name }).from(branches).where(eq(branches.id, station.branchId)).limit(1);
+  const now = new Date();
 
-  return {
-    id: updated!.id,
-    branchId: updated!.branchId,
-    name: updated!.name,
-    category: updated!.category,
-    unit: updated!.unit,
-    description: updated!.description,
-    currentStock: updated!.currentStock,
-    maxStock: updated!.maxStock,
-    minStock: updated!.minStock,
-    reorderPoint: updated!.reorderPoint,
-    status: updated!.status,
-    createdAt: updated!.createdAt.toISOString(),
-    updatedAt: updated!.updatedAt.toISOString(),
-  };
+  await db.transaction(async (tx) => {
+    await tx.insert(notifications).values({
+      recipientType: "admin",
+      recipientId: null,
+      branchId: station.branchId,
+      title: "Inventory Order Request",
+      message:
+        `${actor.name} at ${branch?.name ?? "a branch"} has requested an order for "${item.name}". ` +
+        `Current stock: ${item.currentStock} ${item.unit}.` +
+        (input.notes ? ` Notes: ${input.notes}` : ""),
+      type: "warning",
+      priority: item.status === "critical" ? "high" : "normal",
+      entityType: "inventory_item",
+      entityId: item.id,
+    });
+    await tx
+      .update(inventoryItems)
+      .set({ status: "ordered", orderedAt: now, updatedAt: now })
+      .where(eq(inventoryItems.id, item.id));
+    await writeAudit(tx, {
+      actorId: actor.actorId,
+      actorRole: actor.actorRole,
+      action: "inventory.order_requested",
+      entityType: "inventory_item",
+      entityId: item.id,
+      changes: { branchId: station.branchId, itemName: item.name, notes: input.notes ?? null },
+    });
+  });
+  return { success: true };
 }
 
 async function receiveInventory(station: StationContext, itemId: string, input: ReceiveInventoryInput) {
-  const [item] = await db
-    .select()
-    .from(inventoryItems)
-    .where(
-      and(
-        eq(inventoryItems.id, itemId),
-        eq(inventoryItems.branchId, station.branchId),
-        isNull(inventoryItems.deletedAt)
+  const actor = await resolveInventoryActor(station, input.attendantId);
+
+  const updated = await db.transaction(async (tx) => {
+    // Lock the item so two deliveries can't both add stock for the same order.
+    const [item] = await tx
+      .select()
+      .from(inventoryItems)
+      .where(
+        and(eq(inventoryItems.id, itemId), eq(inventoryItems.branchId, station.branchId), isNull(inventoryItems.deletedAt))
       )
-    )
-    .limit(1);
+      .for("update")
+      .limit(1);
+    if (!item) throw new NotFoundError("Inventory item not found", "ITEM_NOT_FOUND");
+    if (item.status !== "ordered") throw new ConflictError("Item is not in ordered status", "ITEM_NOT_ORDERED");
 
-  if (!item) throw new NotFoundError("Inventory item not found", "ITEM_NOT_FOUND");
+    const quantity = input.receivedQuantity ?? item.orderQuantity ?? 0;
+    if (quantity <= 0) throw new BadRequestError("Enter the quantity received", "QUANTITY_REQUIRED");
 
-  const newStock = item.currentStock + input.receivedQuantity;
-  const newStatus =
-    newStock <= item.minStock ? "critical" : newStock <= item.reorderPoint ? "low" : "ok";
-
-  const [updated] = await db
-    .update(inventoryItems)
-    .set({ currentStock: newStock, status: newStatus, updatedAt: new Date() })
-    .where(eq(inventoryItems.id, itemId))
-    .returning();
-
-  return {
-    id: updated!.id,
-    branchId: updated!.branchId,
-    name: updated!.name,
-    category: updated!.category,
-    unit: updated!.unit,
-    description: updated!.description,
-    currentStock: updated!.currentStock,
-    maxStock: updated!.maxStock,
-    minStock: updated!.minStock,
-    reorderPoint: updated!.reorderPoint,
-    status: updated!.status,
-    createdAt: updated!.createdAt.toISOString(),
-    updatedAt: updated!.updatedAt.toISOString(),
-  };
+    const now = new Date();
+    const newStock = item.currentStock + quantity;
+    const [row] = await tx
+      .update(inventoryItems)
+      .set({
+        currentStock: newStock,
+        status: stockStatus(newStock, item.minStock, item.reorderPoint),
+        arrivalDate: now,
+        lastRestockedAt: now,
+        orderedAt: null,
+        orderQuantity: null,
+        expectedArrivalDate: null,
+        updatedAt: now,
+      })
+      .where(eq(inventoryItems.id, item.id))
+      .returning();
+    await writeAudit(tx, {
+      actorId: actor.actorId,
+      actorRole: actor.actorRole,
+      action: "inventory.order_received",
+      entityType: "inventory_item",
+      entityId: item.id,
+      changes: { branchId: station.branchId, itemName: item.name, receivedQuantity: quantity, newStock },
+    });
+    return row!;
+  });
+  return toInventoryDto(updated);
 }
-
-// ---------- Notifications ----------
 
 async function listNotifications(station: StationContext) {
   const rows = await db
@@ -929,6 +991,39 @@ async function listServices(station: StationContext) {
   }));
 }
 
+
+// ---------- Public branch lookup (the tablet's first screen, before any login) ----------
+
+async function listActiveBranches() {
+  const rows = await db
+    .select({ code: branches.code, name: branches.name })
+    .from(branches)
+    .where(and(isNull(branches.deletedAt), eq(branches.isActive, true)))
+    .orderBy(asc(branches.code));
+  return rows;
+}
+
+async function getBranchByCode(rawCode: string) {
+  const code = rawCode.trim().toUpperCase();
+  const [b] = await db
+    .select()
+    .from(branches)
+    .where(and(eq(branches.code, code), isNull(branches.deletedAt), eq(branches.isActive, true)))
+    .limit(1);
+  if (!b) throw new NotFoundError("Branch not found", "BRANCH_NOT_FOUND");
+  return {
+    id: b.id,
+    name: b.name,
+    code: b.code,
+    address: b.address,
+    city: b.city,
+    phoneNumber: b.phoneNumber,
+    email: b.email,
+    requireStationLogin: b.requireStationLogin,
+    hasStationPin: !!b.stationPinHash,
+  };
+}
+
 export const stationService = {
   login,
   logout,
@@ -947,6 +1042,9 @@ export const stationService = {
   createInventory,
   updateStock,
   orderInventory,
+  requestInventoryOrder,
+  listActiveBranches,
+  getBranchByCode,
   receiveInventory,
   listNotifications,
   getUnreadNotificationCount,
