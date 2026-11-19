@@ -88,6 +88,14 @@ export async function authenticate(request: FastifyRequest) {
   request.user = await resolveUser(clerkUserId);
 }
 
+/** preHandler: verifies the token AND ensures the user has super_admin or admin role. */
+export async function authenticateAdmin(request: FastifyRequest) {
+  await authenticate(request);
+  if (!request.user || (request.user.role !== "super_admin" && request.user.role !== "admin")) {
+    throw new ForbiddenError("You do not have access to admin resources", "ADMIN_ACCESS_REQUIRED");
+  }
+}
+
 /** preHandler: optional token verification. If valid Bearer token is provided, populates request.user. If absent, proceeds without error. */
 export async function optionalAuthenticate(request: FastifyRequest) {
   const header = request.headers.authorization;
