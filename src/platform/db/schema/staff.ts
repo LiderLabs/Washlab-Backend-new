@@ -29,6 +29,9 @@ export const attendants = pgTable(
     phoneNumber: varchar("phone_number", { length: 32 }).notNull(),
     passcodeHash: varchar("passcode_hash", { length: 255 }), // Argon2id, or "legacy-sha256$<salt>$<hash>" until first login
     status: staffStatusEnum("status").notNull().default("invited"),
+    enrollmentTokenHash: varchar("enrollment_token_hash", { length: 255 }),
+    enrollmentTokenExpiresAt: timestamp("enrollment_token_expires_at", { withTimezone: true }),
+    enrolledAt: timestamp("enrolled_at", { withTimezone: true }),
     failedAttempts: integer("failed_attempts").notNull().default(0),
     lockedUntil: timestamp("locked_until", { withTimezone: true }),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),

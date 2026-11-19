@@ -13,6 +13,11 @@ export const customers = pgTable(
     email: varchar("email", { length: 255 }),
     branchId: uuid("branch_id").references(() => branches.id, { onDelete: "set null" }),
     loyaltyPoints: integer("loyalty_points").notNull().default(0), // <-- ADDED THIS LINE
+    status: varchar("status", { length: 32 }).notNull().default("active"),
+    statusNote: varchar("status_note", { length: 255 }),
+    statusChangedBy: varchar("status_changed_by", { length: 128 }),
+    statusChangedAt: timestamp("status_changed_at", { withTimezone: true }),
+    isRegistered: boolean("is_registered").notNull().default(false),
     isVerified: boolean("is_verified").notNull().default(false),
     anonymizedAt: timestamp("anonymized_at", { withTimezone: true }),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),

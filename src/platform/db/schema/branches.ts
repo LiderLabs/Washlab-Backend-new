@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, bigint, boolean, integer, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, text, bigint, boolean, integer, timestamp, uniqueIndex, jsonb } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
 export const branches = pgTable(
@@ -23,6 +23,7 @@ export const branches = pgTable(
     // When true, new outstanding cash is NOT auto-offset by earlier over-send credit (branches under manual audit).
     creditAutoApplyDisabled: boolean("credit_auto_apply_disabled").notNull().default(false),
     momoNumber: varchar("momo_number", { length: 32 }),
+    deliveryFees: jsonb("delivery_fees"),
     isActive: boolean("is_active").notNull().default(true),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
