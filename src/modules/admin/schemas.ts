@@ -487,3 +487,344 @@ export const adminWeeklyBranchStatDtoSchema = z.object({
   weeklyOrders: z.number(),
   weeklyTarget: z.number(),
 });
+
+// --- Admin Reconciliation & Reports Schemas ---
+export const adminBranchCashSummaryDtoSchema = z.object({
+  branchId: z.string().uuid(),
+  branchName: z.string(),
+  code: z.string(),
+  terminalId: z.string().nullable(),
+  collectedGhs: z.number(),
+  sentGhs: z.number(),
+  deductedGhs: z.number(),
+  creditAppliedGhs: z.number(),
+  outstandingGhs: z.number(),
+  collectedPesewas: z.string(),
+  sentPesewas: z.string(),
+  deductedPesewas: z.string(),
+  outstandingPesewas: z.string(),
+});
+
+export const adminReconciliationDtoSchema = z.object({
+  id: z.string().uuid(),
+  _id: z.string(),
+  branchId: z.string().uuid(),
+  branchName: z.string(),
+  attendantId: z.string().uuid().nullable(),
+  attendantName: z.string(),
+  paystackReference: z.string(),
+  paystackTransactionId: z.string().nullable(),
+  amountSentGhs: z.number(),
+  amountSentPesewas: z.string(),
+  senderMomoNumber: z.string(),
+  network: z.string().nullable(),
+  status: z.string(),
+  excessGhs: z.number(),
+  excessPesewas: z.string(),
+  displayText: z.string().nullable(),
+  notes: z.string().nullable(),
+  createdAt: z.string(),
+  completedAt: z.string().nullable(),
+});
+
+export const adminDeductionDtoSchema = z.object({
+  id: z.string().uuid(),
+  _id: z.string(),
+  branchId: z.string().uuid(),
+  branchName: z.string(),
+  attendantId: z.string().uuid().nullable(),
+  attendantName: z.string(),
+  amountGhs: z.number(),
+  amountPesewas: z.string(),
+  reason: z.string(),
+  day: z.string(),
+  createdAt: z.string(),
+});
+
+export const adminDailyReportDtoSchema = z.object({
+  id: z.string().uuid(),
+  _id: z.string(),
+  branchId: z.string().uuid(),
+  branchName: z.string(),
+  attendantId: z.string().uuid().nullable(),
+  attendantName: z.string(),
+  reportDate: z.string(),
+  attendantsOnShift: z.array(z.string()),
+  washerTokensUsed: z.number(),
+  dryerTokensUsed: z.number(),
+  totalTokensUsed: z.number(),
+  serviceBreakdown: z.any(),
+  voucherBreakdown: z.any(),
+  cashGhs: z.number(),
+  mobileMoneyGhs: z.number(),
+  cardGhs: z.number(),
+  totalRevenueGhs: z.number(),
+  soapUnitsUsed: z.number(),
+  freeWashCount: z.number(),
+  technicalFaultCount: z.number(),
+  technicalFaultNotes: z.string().nullable(),
+  outstandingAmountGhs: z.number(),
+  outstandingOrderCount: z.number(),
+  status: z.string(),
+  submittedAt: z.string().nullable(),
+  notes: z.string().nullable(),
+  createdAt: z.string(),
+});
+
+// --- Admin Loyalty & Vouchers Schemas ---
+export const adminLoyaltyStatsDtoSchema = z.object({
+  totalPointsCirculating: z.number(),
+  totalPointsEarned: z.number(),
+  totalPointsRedeemed: z.number(),
+  customerCount: z.number(),
+  topCustomers: z.array(
+    z.object({
+      customerId: z.string().uuid(),
+      _id: z.string(),
+      name: z.string(),
+      phoneNumber: z.string(),
+      points: z.number(),
+    })
+  ),
+});
+
+export const adminLoyaltyTransactionDtoSchema = z.object({
+  id: z.string().uuid(),
+  _id: z.string(),
+  customerId: z.string().uuid(),
+  customerName: z.string(),
+  customerPhone: z.string(),
+  orderId: z.string().uuid().nullable(),
+  pointsDelta: z.number(),
+  balanceAfter: z.number(),
+  reason: z.string(),
+  createdAt: z.string(),
+});
+
+export const adminAdjustPointsSchema = z.object({
+  customerId: z.string().uuid(),
+  pointsDelta: z.number().int(),
+  reason: z.string().trim().min(3).max(255),
+});
+
+export const adminVoucherDtoSchema = z.object({
+  id: z.string().uuid(),
+  _id: z.string(),
+  code: z.string(),
+  name: z.string().nullable(),
+  branchId: z.string().uuid().nullable(),
+  branchName: z.string().nullable().optional(),
+  discountType: z.string(),
+  discountValue: z.number(),
+  discountValuePesewas: z.string(),
+  minOrderAmountGhs: z.number(),
+  maxUsageCount: z.number().nullable(),
+  currentUsageCount: z.number(),
+  maxUsesPerCustomer: z.number().nullable(),
+  validFrom: z.string().nullable(),
+  applicableServices: z.array(z.string()).nullable(),
+  batchId: z.string().nullable().optional(),
+  expiresAt: z.string().nullable(),
+  isActive: z.boolean(),
+  createdAt: z.string(),
+});
+
+export const adminCreateVoucherSchema = z.object({
+  code: z.string().trim().toUpperCase().optional(),
+  name: z.string().trim().optional(),
+  branchId: z.string().uuid().optional(),
+  discountType: z.enum(["percentage", "fixed", "free_wash"]),
+  discountValue: z.number().positive(),
+  minOrderAmount: z.number().nonnegative().optional(),
+  minOrderAmountPesewas: z.number().nonnegative().optional(),
+  maxUsageCount: z.number().int().positive().optional(),
+  maxUsesPerCustomer: z.number().int().positive().optional(),
+  validFrom: z.string().optional(),
+  expiresAt: z.string().optional(),
+  applicableServices: z.array(z.string()).optional(),
+});
+
+export const adminUpdateVoucherSchema = z.object({
+  name: z.string().trim().optional(),
+  discountType: z.enum(["percentage", "fixed", "free_wash"]).optional(),
+  discountValue: z.number().positive().optional(),
+  minOrderAmount: z.number().nonnegative().optional(),
+  minOrderAmountPesewas: z.number().nonnegative().optional(),
+  maxUsageCount: z.number().int().positive().optional(),
+  maxUsesPerCustomer: z.number().int().positive().optional(),
+  validFrom: z.string().optional(),
+  expiresAt: z.string().optional(),
+  applicableServices: z.array(z.string()).optional(),
+  isActive: z.boolean().optional(),
+});
+
+export const adminCreateVoucherBatchSchema = z.object({
+  count: z.number().int().min(1).max(200),
+  value: z.number().positive().max(1000),
+  name: z.string().trim().optional(),
+  validUntil: z.string().optional(),
+  branchId: z.string().uuid().optional(),
+  applicableServices: z.array(z.string()).optional(),
+});
+
+export const adminVoucherBatchDtoSchema = z.object({
+  batchId: z.string(),
+  name: z.string(),
+  value: z.number(),
+  validUntil: z.string().nullable(),
+  createdAt: z.string(),
+  total: z.number(),
+  used: z.number(),
+  available: z.number(),
+});
+
+// --- Admin Operations Schemas ---
+export const adminInventoryItemDtoSchema = z.object({
+  id: z.string().uuid(),
+  _id: z.string(),
+  branchId: z.string().uuid(),
+  branchName: z.string(),
+  name: z.string(),
+  category: z.string(),
+  unit: z.string(),
+  description: z.string().nullable(),
+  currentStock: z.number(),
+  maxStock: z.number(),
+  minStock: z.number(),
+  reorderPoint: z.number(),
+  status: z.string(),
+  orderedAt: z.string().nullable(),
+  orderQuantity: z.number().nullable(),
+  expectedArrivalDate: z.string().nullable(),
+  lastRestockedAt: z.string().nullable(),
+  createdAt: z.string(),
+});
+
+export const adminCreateInventoryItemSchema = z.object({
+  branchId: z.string().uuid(),
+  name: z.string().trim().min(1).max(255),
+  category: z.enum(["cleaning_supplies", "add_ons", "facility", "retail", "operational", "washing_supplies"]),
+  unit: z.string().trim().min(1).max(32),
+  description: z.string().trim().optional(),
+  currentStock: z.number().int().nonnegative(),
+  minStock: z.number().int().nonnegative().optional(),
+  maxStock: z.number().int().positive().optional(),
+  reorderPoint: z.number().int().nonnegative().optional(),
+});
+
+export const adminUpdateInventoryItemSchema = z.object({
+  name: z.string().trim().min(1).max(255).optional(),
+  category: z.enum(["cleaning_supplies", "add_ons", "facility", "retail", "operational", "washing_supplies"]).optional(),
+  unit: z.string().trim().min(1).max(32).optional(),
+  description: z.string().trim().optional(),
+  currentStock: z.number().int().nonnegative().optional(),
+  minStock: z.number().int().nonnegative().optional(),
+  maxStock: z.number().int().positive().optional(),
+  reorderPoint: z.number().int().nonnegative().optional(),
+  status: z.enum(["critical", "low", "ok", "ordered"]).optional(),
+});
+
+export const adminMaintenanceTicketDtoSchema = z.object({
+  id: z.string().uuid(),
+  _id: z.string(),
+  branchId: z.string().uuid(),
+  branchName: z.string(),
+  machineId: z.string().uuid().nullable(),
+  machineName: z.string(),
+  displayName: z.string().nullable(),
+  serialNumber: z.string().nullable(),
+  otherDetails: z.string().nullable(),
+  faultTypes: z.array(z.string()),
+  description: z.string().nullable(),
+  status: z.string(),
+  reportedAt: z.string(),
+  reportedBy: z.string().nullable(),
+  fixedAt: z.string().nullable(),
+  fixedBy: z.string().nullable(),
+  createdAt: z.string(),
+});
+
+export const adminNotificationDtoSchema = z.object({
+  id: z.string().uuid(),
+  _id: z.string(),
+  recipientType: z.string(),
+  recipientId: z.string().nullable(),
+  branchId: z.string().uuid().nullable(),
+  title: z.string(),
+  message: z.string(),
+  type: z.string(),
+  priority: z.string(),
+  entityType: z.string().nullable(),
+  entityId: z.string().nullable(),
+  isRead: z.boolean(),
+  readAt: z.string().nullable(),
+  createdAt: z.string(),
+});
+
+export const adminCreateNotificationSchema = z.object({
+  recipientType: z.enum(["customer", "attendant", "admin", "station", "all"]),
+  recipientId: z.string().optional(),
+  branchId: z.string().uuid().optional(),
+  title: z.string().trim().min(1).max(255),
+  message: z.string().trim().min(1),
+  type: z.string().default("info"),
+  priority: z.string().default("normal"),
+  entityType: z.string().optional(),
+  entityId: z.string().optional(),
+});
+
+export const adminSystemSettingsDtoSchema = z.object({
+  id: z.number(),
+  taxRatePercent: z.number(),
+  pointsPerGhs: z.number(),
+  minRedemptionPoints: z.number(),
+  autoLogoutMinutes: z.number(),
+  deliveryPricing: z.object({
+    dropoff_self: z.number(),
+    dropoff_delivery: z.number(),
+    pickup_self: z.number(),
+    full_service: z.number(),
+  }).optional(),
+  updatedBy: z.string().nullable(),
+  updatedAt: z.string(),
+});
+
+export const adminUpdateSystemSettingsSchema = z.object({
+  taxRatePercent: z.number().nonnegative().optional(),
+  pointsPerGhs: z.number().int().positive().optional(),
+  minRedemptionPoints: z.number().int().nonnegative().optional(),
+  autoLogoutMinutes: z.number().int().positive().optional(),
+});
+
+export const adminHeadlineDtoSchema = z.object({
+  id: z.string().uuid(),
+  _id: z.string(),
+  branchId: z.string().uuid().nullable(),
+  title: z.string(),
+  body: z.string().nullable(),
+  priority: z.string(),
+  expiresAt: z.string().nullable(),
+  createdAt: z.string(),
+});
+
+export const adminCreateHeadlineSchema = z.object({
+  title: z.string().trim().min(1).max(255),
+  body: z.string().trim().optional(),
+  branchId: z.string().uuid().optional(),
+  priority: z.enum(["info", "notice", "urgent"]).default("info"),
+  expiresAt: z.string().optional(),
+});
+
+export const adminAuditLogDtoSchema = z.object({
+  id: z.string().uuid(),
+  _id: z.string(),
+  action: z.string(),
+  entityType: z.string(),
+  entityId: z.string(),
+  performedByUserId: z.string(),
+  performedByRole: z.string(),
+  changes: z.any().nullable(),
+  ipAddress: z.string().nullable(),
+  userAgent: z.string().nullable(),
+  createdAt: z.string(),
+});

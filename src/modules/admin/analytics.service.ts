@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, isNull, lte, neq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, lte, ne, sql } from "drizzle-orm";
 import { db } from "../../platform/db/index.js";
 import { orders } from "../../platform/db/schema/orders.js";
 import { payments } from "../../platform/db/schema/payments.js";
@@ -214,7 +214,7 @@ export const adminAnalyticsService = {
           isNull(orders.deletedAt),
           gte(orders.createdAt, new Date(weekStartTs)),
           lte(orders.createdAt, new Date(weekEndTs)),
-          neq(orders.status, "cancelled")
+          ne(orders.status, "cancelled")
         )
       )
       .groupBy(orders.branchId);
