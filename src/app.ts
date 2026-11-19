@@ -14,6 +14,7 @@ import { customerRoutes } from "./modules/customers/routes.js";
 import { catalogRoutes } from "./modules/catalog/routes.js";
 import { voucherRoutes } from "./modules/vouchers/routes.js";
 import { orderRoutes } from "./modules/orders/routes.js";
+import { adminRoutes } from "./modules/admin/routes.js";
 import { paymentRoutes } from "./modules/payments/routes.js";
 import { stationRoutes } from "./modules/station/routes.js";
 import { stationOrderRoutes } from "./modules/station/orders.routes.js";
@@ -156,6 +157,7 @@ export async function buildApp() {
   );
 
   // Register domain modules under /v1
+  await app.register(adminRoutes, { prefix: "/v1/admin" });
   await app.register(branchRoutes, { prefix: "/v1/branches" });
   await app.register(customerRoutes, { prefix: "/v1/customers" });
   await app.register(catalogRoutes, { prefix: "/v1/services" });

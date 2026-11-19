@@ -51,3 +51,27 @@ export const branchMachines = pgTable(
 
 export type BranchService = typeof branchServices.$inferSelect;
 export type BranchMachine = typeof branchMachines.$inferSelect;
+
+export const services = pgTable(
+  "services",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    legacyConvexId: varchar("legacy_convex_id", { length: 64 }).unique(),
+    name: varchar("name", { length: 100 }).notNull(),
+    code: varchar("code", { length: 64 }).notNull(),
+    description: text("description"),
+    imageUrl: text("image_url"),
+    basePricePesewas: bigint("base_price_pesewas", { mode: "bigint" }).notNull(),
+    pricingType: varchar("pricing_type", { length: 32 }).notNull().default("per_load"),
+    isActive: boolean("is_active").notNull().default(true),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("idx_services_code_active").on(table.code).where(sql`deleted_at IS NULL`),
+  ]
+);
+
+export type Service = typeof services.$inferSelect;
+export type NewService = typeof services.$inferInsert;
