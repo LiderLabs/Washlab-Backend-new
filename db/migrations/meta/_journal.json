@@ -85,6 +85,20 @@
       "when": 1794998404465,
       "tag": "0011_inventory_order_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1795082699383,
+      "tag": "0012_voucher_rules",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1795082975964,
+      "tag": "0013_maintenance_and_notices",
+      "breakpoints": true
     }
   ]
 }

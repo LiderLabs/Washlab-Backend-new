@@ -1,3 +1,4 @@
+import { headlines, maintenanceTickets } from "../../platform/db/schema/maintenance.js";
 import { loyaltyLedger, voucherUsages, vouchers } from "../../platform/db/schema/loyalty.js";
 import { inArray } from "drizzle-orm";
 import { db } from "../../platform/db/index.js";
@@ -75,6 +76,8 @@ export async function destroyBranch(f: { branchId: string; customerId: string })
   }
   await db.delete(loyaltyLedger).where(eq(loyaltyLedger.customerId, f.customerId));
   await db.delete(vouchers).where(eq(vouchers.branchId, f.branchId));
+  await db.delete(maintenanceTickets).where(eq(maintenanceTickets.branchId, f.branchId));
+  await db.delete(headlines).where(eq(headlines.branchId, f.branchId));
   await purgeCash([f.branchId]);
   await db.delete(dailyReports).where(eq(dailyReports.branchId, f.branchId));
   await db.delete(orders).where(eq(orders.branchId, f.branchId));

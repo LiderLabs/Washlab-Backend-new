@@ -71,6 +71,17 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # Fails if the Drizzle schema has changes that no migration covers (a column added in code but never migrated
+      # passes typecheck and then breaks at runtime). generate prints "No schema changes" and writes nothing when clean.
+      - name: Check migrations match the schema
+        run: |
+          npx drizzle-kit generate --name ci_drift_check
+          if [ -n "$(git status --porcelain db)" ]; then
+            echo "::error::Schema changed without a migration. Run: npx drizzle-kit generate --name <what_changed> and commit db/migrations."
+            git status --short db
+            exit 1
+          fi
+
       - name: Migrate database
         run: npm run db:migrate
 

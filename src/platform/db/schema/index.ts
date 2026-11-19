@@ -5,6 +5,7 @@ export * from "./catalog.js";
 export * from "./operations.js";
 export * from "./cash.js";
 export * from "./reports.js";
+export * from "./maintenance.js";
 export * from "./orders.js";
 export * from "./payments.js";
 export * from "./loyalty.js";
