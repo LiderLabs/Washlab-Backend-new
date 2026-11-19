@@ -36,8 +36,10 @@ export const vouchers = pgTable(
     maxUsesPerCustomer: integer("max_uses_per_customer"),
     validFrom: timestamp("valid_from", { withTimezone: true }),
     applicableServices: jsonb("applicable_services").$type<string[]>(),
+    batchId: varchar("batch_id", { length: 64 }),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
     isActive: boolean("is_active").notNull().default(true),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   }
 );

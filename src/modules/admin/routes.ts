@@ -5,19 +5,52 @@ import { authenticate, requirePermission, requireRole } from "../../platform/aut
 import { adminStaffService } from "./service.js";
 import { adminBranchesService } from "./branches.service.js";
 import { adminOrdersService } from "./orders.service.js";
+import { adminAnalyticsService } from "./analytics.service.js";
+import { adminReconciliationService } from "./reconciliation.service.js";
+import { adminLoyaltyService } from "./loyalty.service.js";
+import { adminOperationsService } from "./operations.service.js";
 import {
+  adminAdjustPointsSchema,
+  adminAnalyticsOverviewDtoSchema,
+  adminAnalyticsOverviewQuerySchema,
+  adminAuditLogDtoSchema,
+  adminBranchCashSummaryDtoSchema,
   adminBranchDtoSchema,
   adminBranchServiceDtoSchema,
   adminCreateBranchSchema,
+  adminCreateHeadlineSchema,
+  adminCreateInventoryItemSchema,
+  adminCreateNotificationSchema,
+  adminCreateVoucherBatchSchema,
+  adminCreateVoucherSchema,
   adminCustomerDtoSchema,
   adminCustomerStatsDtoSchema,
+  adminDailyReportDtoSchema,
+  adminDeductionDtoSchema,
+  adminHeadlineDtoSchema,
+  adminInventoryItemDtoSchema,
   adminListCustomersQuerySchema,
   adminListOrdersQuerySchema,
+  adminLoyaltyStatsDtoSchema,
+  adminLoyaltyTransactionDtoSchema,
+  adminMaintenanceTicketDtoSchema,
+  adminNotificationDtoSchema,
   adminOrderDetailDtoSchema,
   adminOrderSummaryDtoSchema,
+  adminPaymentStatsDtoSchema,
+  adminPaymentStatsQuerySchema,
+  adminReconciliationDtoSchema,
+  adminSystemSettingsDtoSchema,
   adminUpdateBranchSchema,
+  adminUpdateInventoryItemSchema,
   adminUpdateOrderStatusSchema,
+  adminUpdateSystemSettingsSchema,
+  adminUpdateVoucherSchema,
   adminUserResponseSchema,
+  adminVoucherBatchDtoSchema,
+  adminVoucherDtoSchema,
+  adminWeeklyBranchStatDtoSchema,
+  adminWeeklyOrderStatsQuerySchema,
   attendantDetailSchema,
   branchMachineDtoSchema,
   catalogServiceDtoSchema,
@@ -773,5 +806,578 @@ export async function adminRoutes(app: FastifyInstance) {
       },
     },
     async (request) => adminOrdersService.deleteCustomer(request.user!, request.params.id, meta(request))
+  );
+
+  // ---------- 9. Admin Analytics & Finance ----------
+  server.get(
+    "/analytics/overview",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Analytics"],
+        summary: "Get overall system analytics (revenue, order counts, status distribution, top customers)",
+        security,
+        querystring: adminAnalyticsOverviewQuerySchema,
+        response: { 200: adminAnalyticsOverviewDtoSchema },
+      },
+    },
+    async (request) => adminAnalyticsService.getOverview(request.query)
+  );
+
+  server.get(
+    "/analytics/payments",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Analytics"],
+        summary: "Get payment method breakdown, revenue by channel, and daily trends",
+        security,
+        querystring: adminPaymentStatsQuerySchema,
+        response: { 200: adminPaymentStatsDtoSchema },
+      },
+    },
+    async (request) => adminAnalyticsService.getPaymentStats(request.query)
+  );
+
+  server.get(
+    "/analytics/weekly",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Analytics"],
+        summary: "Get weekly order progress and target comparisons across branches",
+        security,
+        querystring: adminWeeklyOrderStatsQuerySchema,
+        response: { 200: z.array(adminWeeklyBranchStatDtoSchema) },
+      },
+    },
+    async (request) => adminAnalyticsService.getWeeklyOrderStats(request.query)
+  );
+
+  // ---------- 10. Admin Cash Reconciliation & Daily Reports ----------
+  server.get(
+    "/reconciliation/summaries",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Reconciliation"],
+        summary: "Get branch cash summaries (collected, sent, deducted, outstanding)",
+        security,
+        querystring: z.object({ sinceTs: z.coerce.number().optional(), untilTs: z.coerce.number().optional() }),
+        response: { 200: z.array(adminBranchCashSummaryDtoSchema) },
+      },
+    },
+    async (request) => adminReconciliationService.getBranchCashSummaries(request.query.sinceTs, request.query.untilTs)
+  );
+
+  server.get(
+    "/reconciliation/history",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Reconciliation"],
+        summary: "Get all cash reconciliation transactions across branches",
+        security,
+        response: { 200: z.array(adminReconciliationDtoSchema) },
+      },
+    },
+    async () => adminReconciliationService.getAllReconciliations()
+  );
+
+  server.get(
+    "/reconciliation/deductions",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Reconciliation"],
+        summary: "Get all cash deductions recorded across branches",
+        security,
+        response: { 200: z.array(adminDeductionDtoSchema) },
+      },
+    },
+    async () => adminReconciliationService.getAllDeductions()
+  );
+
+  server.get(
+    "/reports",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Reports"],
+        summary: "Get all submitted daily reports across branches",
+        security,
+        querystring: z.object({
+          branchId: z.string().uuid().optional(),
+          startDate: z.string().optional(),
+          endDate: z.string().optional(),
+        }),
+        response: { 200: z.array(adminDailyReportDtoSchema) },
+      },
+    },
+    async (request) => adminReconciliationService.getAllDailyReports(request.query)
+  );
+
+  server.get(
+    "/reports/:id",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Reports"],
+        summary: "Get single daily report details",
+        security,
+        params: idParam,
+        response: { 200: adminDailyReportDtoSchema },
+      },
+    },
+    async (request) => adminReconciliationService.getDailyReportById(request.params.id)
+  );
+
+  // ---------- 11. Admin Loyalty & Vouchers ----------
+  server.get(
+    "/loyalty/stats",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Loyalty"],
+        summary: "Get overall loyalty points statistics and top loyalty customers",
+        security,
+        response: { 200: adminLoyaltyStatsDtoSchema },
+      },
+    },
+    async () => adminLoyaltyService.getLoyaltyStats()
+  );
+
+  server.get(
+    "/loyalty/transactions",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Loyalty"],
+        summary: "Get loyalty points transaction ledger",
+        security,
+        querystring: z.object({
+          customerId: z.string().uuid().optional(),
+          limit: z.coerce.number().int().min(1).max(200).default(50),
+          offset: z.coerce.number().int().min(0).default(0),
+        }),
+        response: { 200: z.array(adminLoyaltyTransactionDtoSchema) },
+      },
+    },
+    async (request) => adminLoyaltyService.getLoyaltyTransactions(request.query)
+  );
+
+  server.post(
+    "/loyalty/adjust",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Loyalty"],
+        summary: "Manually adjust customer loyalty points balance",
+        security,
+        body: adminAdjustPointsSchema,
+        response: {
+          200: z.object({
+            success: z.boolean(),
+            customerId: z.string().uuid(),
+            pointsDelta: z.number(),
+            newBalance: z.number(),
+            ledgerId: z.string().uuid(),
+          }),
+        },
+      },
+    },
+    async (request) => adminLoyaltyService.adjustLoyaltyPoints(request.user!, request.body, meta(request))
+  );
+
+  server.get(
+    "/vouchers",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Vouchers"],
+        summary: "List all vouchers with usage and validity stats",
+        security,
+        querystring: z.object({
+          branchId: z.string().uuid().optional(),
+          isActive: z.preprocess((v) => v === "true" || v === true, z.boolean()).optional(),
+          search: z.string().trim().optional(),
+          limit: z.coerce.number().int().min(1).max(200).default(100),
+          offset: z.coerce.number().int().min(0).default(0),
+        }),
+        response: { 200: z.array(adminVoucherDtoSchema) },
+      },
+    },
+    async (request) => adminLoyaltyService.listVouchers(request.query)
+  );
+
+  server.post(
+    "/vouchers",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Vouchers"],
+        summary: "Create a new voucher",
+        security,
+        body: adminCreateVoucherSchema,
+        response: { 201: adminVoucherDtoSchema },
+      },
+    },
+    async (request, reply) => {
+      const voucher = await adminLoyaltyService.createVoucher(request.user!, request.body, meta(request));
+      return reply.status(201).send(voucher);
+    }
+  );
+
+  server.patch(
+    "/vouchers/:id",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Vouchers"],
+        summary: "Update an existing voucher",
+        security,
+        params: idParam,
+        body: adminUpdateVoucherSchema,
+        response: { 200: adminVoucherDtoSchema },
+      },
+    },
+    async (request) => adminLoyaltyService.updateVoucher(request.user!, request.params.id, request.body, meta(request))
+  );
+
+  server.delete(
+    "/vouchers/:id",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Vouchers"],
+        summary: "Soft-delete a voucher",
+        security,
+        params: idParam,
+        response: successResponse,
+      },
+    },
+    async (request) => adminLoyaltyService.deleteVoucher(request.user!, request.params.id, meta(request))
+  );
+
+  server.get(
+    "/vouchers/batches",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Vouchers"],
+        summary: "List voucher batches with total, used, and available counts",
+        security,
+        response: { 200: z.array(adminVoucherBatchDtoSchema) },
+      },
+    },
+    async () => adminLoyaltyService.listVoucherBatches()
+  );
+
+  server.post(
+    "/vouchers/batches",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Vouchers"],
+        summary: "Generate a batch of unique single-use gift vouchers",
+        security,
+        body: adminCreateVoucherBatchSchema,
+        response: {
+          201: z.object({
+            batchId: z.string(),
+            count: z.number(),
+            codes: z.array(z.string()),
+          }),
+        },
+      },
+    },
+    async (request, reply) => {
+      const batch = await adminLoyaltyService.createVoucherBatch(request.user!, request.body, meta(request));
+      return reply.status(201).send(batch);
+    }
+  );
+
+  server.post(
+    "/vouchers/batches/:batchId/deactivate",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Vouchers"],
+        summary: "Deactivate all unredeemed vouchers in a batch",
+        security,
+        params: z.object({ batchId: z.string() }),
+        response: successResponse,
+      },
+    },
+    async (request) => adminLoyaltyService.deactivateVoucherBatch(request.user!, request.params.batchId, meta(request))
+  );
+
+  // ---------- 12. Admin Inventory & Maintenance ----------
+  server.get(
+    "/inventory",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Inventory"],
+        summary: "List inventory items across branches or filter by branch",
+        security,
+        querystring: z.object({ branchId: z.string().uuid().optional() }),
+        response: { 200: z.array(adminInventoryItemDtoSchema) },
+      },
+    },
+    async (request) => adminOperationsService.listInventory(request.query.branchId)
+  );
+
+  server.post(
+    "/inventory",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Inventory"],
+        summary: "Create a new inventory item",
+        security,
+        body: adminCreateInventoryItemSchema,
+        response: successResponse,
+      },
+    },
+    async (request) => adminOperationsService.createInventoryItem(request.user!, request.body, meta(request))
+  );
+
+  server.patch(
+    "/inventory/:id",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Inventory"],
+        summary: "Update stock levels or details for an inventory item",
+        security,
+        params: idParam,
+        body: adminUpdateInventoryItemSchema,
+        response: successResponse,
+      },
+    },
+    async (request) =>
+      adminOperationsService.updateInventoryItem(request.user!, request.params.id, request.body, meta(request))
+  );
+
+  server.delete(
+    "/inventory/:id",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Inventory"],
+        summary: "Soft-delete an inventory item",
+        security,
+        params: idParam,
+        response: successResponse,
+      },
+    },
+    async (request) => adminOperationsService.deleteInventoryItem(request.user!, request.params.id, meta(request))
+  );
+
+  server.get(
+    "/maintenance/tickets",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Maintenance"],
+        summary: "List machine maintenance tickets",
+        security,
+        querystring: z.object({
+          branchId: z.string().uuid().optional(),
+          status: z.enum(["open", "fixed"]).optional(),
+        }),
+        response: { 200: z.array(adminMaintenanceTicketDtoSchema) },
+      },
+    },
+    async (request) => adminOperationsService.listMaintenanceTickets(request.query.branchId, request.query.status)
+  );
+
+  server.post(
+    "/maintenance/tickets/:id/resolve",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Maintenance"],
+        summary: "Mark a maintenance ticket as fixed/resolved",
+        security,
+        params: idParam,
+        response: { 200: z.object({ success: z.boolean(), ticketId: z.string().uuid(), status: z.string() }) },
+      },
+    },
+    async (request) => adminOperationsService.markMaintenanceTicketFixed(request.user!, request.params.id, meta(request))
+  );
+
+  server.delete(
+    "/maintenance/tickets/:id",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Maintenance"],
+        summary: "Delete a maintenance ticket",
+        security,
+        params: idParam,
+        response: successResponse,
+      },
+    },
+    async (request) => adminOperationsService.deleteMaintenanceTicket(request.user!, request.params.id, meta(request))
+  );
+
+  // ---------- 13. Admin Notifications, Settings, Headlines & Audit Logs ----------
+  server.get(
+    "/notifications",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Notifications"],
+        summary: "Get notifications feed",
+        security,
+        querystring: z.object({
+          recipientType: z.string().optional(),
+          limit: z.coerce.number().int().min(1).max(200).default(50),
+        }),
+        response: { 200: z.array(adminNotificationDtoSchema) },
+      },
+    },
+    async (request) => adminOperationsService.listNotifications(request.query)
+  );
+
+  server.post(
+    "/notifications",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Notifications"],
+        summary: "Broadcast or send a notification",
+        security,
+        body: adminCreateNotificationSchema,
+        response: successResponse,
+      },
+    },
+    async (request) => adminOperationsService.createNotification(request.user!, request.body, meta(request))
+  );
+
+  server.post(
+    "/notifications/mark-all-read",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Notifications"],
+        summary: "Mark all notifications as read",
+        security,
+        response: successResponse,
+      },
+    },
+    async (request) => adminOperationsService.markAllNotificationsRead(request.user!)
+  );
+
+  server.delete(
+    "/notifications/:id",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Notifications"],
+        summary: "Delete a notification",
+        security,
+        params: idParam,
+        response: successResponse,
+      },
+    },
+    async (request) => adminOperationsService.deleteNotification(request.user!, request.params.id, meta(request))
+  );
+
+  server.get(
+    "/settings",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Settings"],
+        summary: "Get system configuration settings",
+        security,
+        response: { 200: adminSystemSettingsDtoSchema },
+      },
+    },
+    async () => adminOperationsService.getSystemSettings()
+  );
+
+  server.patch(
+    "/settings",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Settings"],
+        summary: "Update system configuration settings",
+        security,
+        body: adminUpdateSystemSettingsSchema,
+        response: successResponse,
+      },
+    },
+    async (request) => adminOperationsService.updateSystemSettings(request.user!, request.body, meta(request))
+  );
+
+  server.get(
+    "/headlines",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Headlines"],
+        summary: "List banner headlines/announcements",
+        security,
+        querystring: z.object({ branchId: z.string().uuid().optional() }),
+        response: { 200: z.array(adminHeadlineDtoSchema) },
+      },
+    },
+    async (request) => adminOperationsService.listHeadlines(request.query.branchId)
+  );
+
+  server.post(
+    "/headlines",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Headlines"],
+        summary: "Create a new announcement headline",
+        security,
+        body: adminCreateHeadlineSchema,
+        response: successResponse,
+      },
+    },
+    async (request) => adminOperationsService.createHeadline(request.user!, request.body, meta(request))
+  );
+
+  server.delete(
+    "/headlines/:id",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Headlines"],
+        summary: "Remove an announcement headline",
+        security,
+        params: idParam,
+        response: successResponse,
+      },
+    },
+    async (request) => adminOperationsService.deleteHeadline(request.user!, request.params.id, meta(request))
+  );
+
+  server.get(
+    "/audit-logs",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Audit"],
+        summary: "Query system audit logs by entity, actor, or date range",
+        security,
+        querystring: z.object({
+          entityType: z.string().optional(),
+          entityId: z.string().optional(),
+          actorId: z.string().optional(),
+          limit: z.coerce.number().int().min(1).max(200).default(100),
+          offset: z.coerce.number().int().min(0).default(0),
+        }),
+        response: { 200: z.array(adminAuditLogDtoSchema) },
+      },
+    },
+    async (request) => adminOperationsService.listAuditLogs(request.query)
   );
 }
