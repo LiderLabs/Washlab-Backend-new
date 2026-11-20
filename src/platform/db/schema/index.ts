@@ -10,3 +10,5 @@ export * from "./orders.js";
 export * from "./payments.js";
 export * from "./loyalty.js";
 export * from "./infrastructure.js";
+export * from "./subscriptions.js";
+export * from "./subscription-usages.js";
