@@ -8,7 +8,7 @@ import { UnauthorizedError, BadRequestError } from "../../platform/errors/index.
 import { db } from "../../platform/db/index.js";
 import { webhookEvents } from "../../platform/db/schema/payments.js";
 import type { PaystackVerification } from "../../platform/paystack/index.js";
-import { settleOrderPayment } from "./settle.js";
+import { settleOrderPayment, settleSubscriptionPayment } from "./settle.js";
 import { settleRecon } from "../cash/recon.service.js";
 
 type ChargeData = {
@@ -50,8 +50,11 @@ async function processChargeSuccess(d: ChargeData): Promise<Outcome> {
   }
 
   if (reference.startsWith("SUB-")) {
-    // Subscriptions are not built yet. Keep the event unprocessed so it can be replayed later.
-    return { done: false, reason: "SUBSCRIPTIONS_NOT_IMPLEMENTED", retry: false };
+    const r = await settleSubscriptionPayment(reference, gateway, "webhook");
+    if (r.result === "activated" || r.result === "already_active") return { done: true };
+    if (r.result === "mismatch") return { done: false, reason: "AMOUNT_MISMATCH", retry: false };
+    if (r.result === "not_found") return { done: false, reason: "UNMATCHED_SUBSCRIPTION_REFERENCE", retry: false };
+    return { done: false, reason: "NOT_SUCCESSFUL", retry: false };
   }
 
   const r = await settleOrderPayment(reference, gateway, "webhook");

@@ -4,6 +4,7 @@ import { customers } from "./customers.js";
 import { branches } from "./branches.js";
 import { attendants, userRoleEnum } from "./staff.js";
 import { branchMachines } from "./catalog.js";
+import { customerSubscriptions } from "./subscriptions.js";
 
 export const orderStatusEnum = pgEnum("order_status", [
   "pending_dropoff", // online order placed, laundry not yet dropped at the station
@@ -21,7 +22,7 @@ export const orderStatusEnum = pgEnum("order_status", [
 
 export const orderTypeEnum = pgEnum("order_type", ["walk_in", "online"]);
 
-export const paymentMethodEnum = pgEnum("payment_method", ["cash", "mobile_money", "card", "voucher"]);
+export const paymentMethodEnum = pgEnum("payment_method", ["cash", "mobile_money", "card", "voucher", "subscription"]);
 
 /** Statuses after which the physical bag is free to be reused. */
 export const BAG_RELEASING_STATUSES = ["completed", "cancelled", "delivered"] as const;
@@ -59,6 +60,8 @@ export const orders = pgTable(
     deliveryHall: varchar("delivery_hall", { length: 100 }),
     deliveryRoom: varchar("delivery_room", { length: 50 }),
     paymentMethod: paymentMethodEnum("payment_method"),
+    subscriptionId: uuid("subscription_id").references(() => customerSubscriptions.id, { onDelete: "set null" }),
+    subscriptionLoadsUsed: integer("subscription_loads_used"),
     status: orderStatusEnum("status").notNull().default("pending_dropoff"),
     weightKg: numeric("weight_kg", { precision: 6, scale: 2 }),
     basePricePesewas: bigint("base_price_pesewas", { mode: "bigint" }).notNull().default(sql`0`),

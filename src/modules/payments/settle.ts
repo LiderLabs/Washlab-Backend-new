@@ -2,6 +2,7 @@ import { and, eq, or, sql } from "drizzle-orm";
 import { db } from "../../platform/db/index.js";
 import { orders } from "../../platform/db/schema/orders.js";
 import { payments } from "../../platform/db/schema/payments.js";
+import { customerSubscriptions } from "../../platform/db/schema/subscriptions.js";
 import { writeAudit } from "../../platform/audit/index.js";
 import { broadcastRealtimeEvent } from "../../platform/realtime/index.js";
 import { methodFromChannel, PaystackVerification } from "../../platform/paystack/index.js";
@@ -12,6 +13,89 @@ export type SettleResult =
   | { result: "not_found" }
   | { result: "not_successful"; gatewayStatus: string }
   | { result: "mismatch"; expected: string; received: string };
+
+function formatPesewas(amount: bigint) {
+  const digits = amount.toString().replace("-", "");
+  const padded = digits.padStart(3, "0");
+  return `${amount < 0n ? "-" : ""}${padded.slice(0, -2)}.${padded.slice(-2)}`;
+}
+
+/** Activates a pending subscription from a signature-verified Paystack charge. */
+export async function settleSubscriptionPayment(
+  reference: string,
+  gateway: PaystackVerification,
+  source: "webhook"
+) {
+  if (gateway.status !== "success") return { result: "not_successful" as const };
+
+  return db.transaction(async (tx) => {
+    const [sub] = await tx
+      .select()
+      .from(customerSubscriptions)
+      .where(eq(customerSubscriptions.paymentReference, reference))
+      .for("update")
+      .limit(1);
+    if (!sub || sub.deletedAt) return { result: "not_found" as const };
+    if (sub.status === "active") return { result: "already_active" as const };
+    if (sub.status !== "pending_payment") return { result: "ignored" as const };
+
+    const expected = sub.planPricePesewas;
+    if (gateway.currency !== "GHS" || gateway.amountPesewas < expected) {
+      const received = gateway.currency === "GHS" ? `GHS ${formatPesewas(gateway.amountPesewas)}` : gateway.currency;
+      const note =
+        `PAYMENT AMOUNT MISMATCH: Paystack received ${received}; ` +
+        `plan costs GHS ${formatPesewas(expected)}.`;
+      await tx
+        .update(customerSubscriptions)
+        .set({ note, updatedAt: new Date() })
+        .where(eq(customerSubscriptions.id, sub.id));
+      await writeAudit(tx, {
+        actorId: `system:paystack:${source}`,
+        actorRole: "system",
+        action: "subscription.payment_amount_mismatch",
+        entityType: "customer_subscription",
+        entityId: sub.id,
+        changes: {
+          reference,
+          expectedPesewas: expected.toString(),
+          receivedPesewas: gateway.amountPesewas.toString(),
+          currency: gateway.currency,
+        },
+      });
+      return { result: "mismatch" as const };
+    }
+
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + sub.validityDays * 24 * 60 * 60 * 1000);
+    await tx
+      .update(customerSubscriptions)
+      .set({
+        status: "active",
+        loadsUsed: 0,
+        paidAt: gateway.paidAt ?? now,
+        activatedAt: now,
+        expiresAt,
+        updatedAt: now,
+        note: null,
+      })
+      .where(eq(customerSubscriptions.id, sub.id));
+    await writeAudit(tx, {
+      actorId: `system:paystack:${source}`,
+      actorRole: "system",
+      action: "subscription.activated",
+      entityType: "customer_subscription",
+      entityId: sub.id,
+      changes: {
+        reference,
+        planId: sub.planId,
+        planPricePesewas: expected.toString(),
+        loadsTotal: sub.loadsTotal,
+        expiresAt: expiresAt.toISOString(),
+      },
+    });
+    return { result: "activated" as const, subscriptionId: sub.id };
+  });
+}
 
 /** A payment is found by its current reference, or by an earlier attempt's reference (abandoned popups). */
 export async function findPaymentByReference(reference: string) {
@@ -49,6 +133,24 @@ export async function settleOrderPayment(
     const [payment] = await tx.select().from(payments).where(eq(payments.id, found.id)).for("update").limit(1);
     if (!order || !payment) return { result: "not_found" };
     if (payment.status === "paid") return { result: "already_paid", orderId: order.id, branchId: order.branchId };
+    if (order.paymentStatus === "paid") {
+      await writeAudit(tx, {
+        actorId: `system:paystack:${source}`,
+        actorRole: "system",
+        action: "payment.late_success_after_order_paid",
+        entityType: "payment",
+        entityId: payment.id,
+        changes: {
+          reference,
+          orderId: order.id,
+          orderNumber: order.orderNumber,
+          gatewayTransactionId: gateway.transactionId,
+          receivedPesewas: gateway.amountPesewas.toString(),
+          note: "Paystack reported success after the order had already been paid by another method",
+        },
+      });
+      return { result: "already_paid", orderId: order.id, branchId: order.branchId };
+    }
 
     if (gateway.currency !== payment.currency || gateway.amountPesewas !== payment.amountPesewas) {
       await writeAudit(tx, {

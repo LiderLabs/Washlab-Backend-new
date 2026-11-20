@@ -113,6 +113,13 @@
       "when": 1795088669873,
       "tag": "0015_wild_energizer",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1795178890978,
+      "tag": "0016_furry_mother_askani",
+      "breakpoints": true
     }
   ]
 }
