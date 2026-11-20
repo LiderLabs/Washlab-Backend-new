@@ -28,6 +28,7 @@ export const reportListQuery = z.object({
   startDate: dateString.optional(),
   endDate: dateString.optional(),
   limit: z.coerce.number().int().min(1).max(120).default(60),
+  offset: z.coerce.number().int().min(0).default(0),
 });
 export const saveDraftBody = z.object({ ...manualFields, attendantId: z.string().uuid().optional() });
 export const submitReportBody = z.object({

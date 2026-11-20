@@ -114,7 +114,11 @@ export async function adminRoutes(app: FastifyInstance) {
         response: { 200: z.array(attendantDetailSchema) },
       },
     },
-    async (request) => adminStaffService.listAttendants(request.query)
+    async (request, reply) => {
+      const result = await adminStaffService.listAttendants(request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.post(
@@ -308,7 +312,11 @@ export async function adminRoutes(app: FastifyInstance) {
         response: { 200: z.array(adminBranchDtoSchema) },
       },
     },
-    async (request) => adminBranchesService.listBranches(request.query.includeInactive)
+    async (request, reply) => {
+      const result = await adminBranchesService.listBranches(request.query.includeInactive, request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.get(
@@ -319,10 +327,18 @@ export async function adminRoutes(app: FastifyInstance) {
         tags: ["Admin Branches"],
         summary: "List all active branches",
         security,
+        querystring: z.object({
+          limit: z.coerce.number().int().min(1).max(200).default(50),
+          offset: z.coerce.number().int().min(0).default(0),
+        }),
         response: { 200: z.array(adminBranchDtoSchema) },
       },
     },
-    async () => adminBranchesService.listBranches(false)
+    async (request, reply) => {
+      const result = await adminBranchesService.listBranches(false, request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.get(
@@ -458,11 +474,19 @@ export async function adminRoutes(app: FastifyInstance) {
         summary: "List all machines in a branch",
         security,
         params: idParam,
-        querystring: z.object({ onlyActive: z.preprocess((v) => v === "true" || v === true, z.boolean()).optional() }),
+        querystring: z.object({
+          onlyActive: z.preprocess((v) => v === "true" || v === true, z.boolean()).optional(),
+          limit: z.coerce.number().int().min(1).max(200).default(50),
+          offset: z.coerce.number().int().min(0).default(0),
+        }),
         response: { 200: z.array(branchMachineDtoSchema) },
       },
     },
-    async (request) => adminBranchesService.listMachinesByBranch(request.params.id, request.query.onlyActive)
+    async (request, reply) => {
+      const result = await adminBranchesService.listMachinesByBranch(request.params.id, request.query.onlyActive, request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.get(
@@ -474,10 +498,18 @@ export async function adminRoutes(app: FastifyInstance) {
         summary: "List active machines in a branch",
         security,
         params: idParam,
+        querystring: z.object({
+          limit: z.coerce.number().int().min(1).max(200).default(50),
+          offset: z.coerce.number().int().min(0).default(0),
+        }),
         response: { 200: z.array(branchMachineDtoSchema) },
       },
     },
-    async (request) => adminBranchesService.listMachinesByBranch(request.params.id, true)
+    async (request, reply) => {
+      const result = await adminBranchesService.listMachinesByBranch(request.params.id, true, request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.post(
@@ -543,10 +575,18 @@ export async function adminRoutes(app: FastifyInstance) {
         tags: ["Admin Services"],
         summary: "List global catalog services",
         security,
+        querystring: z.object({
+          limit: z.coerce.number().int().min(1).max(200).default(50),
+          offset: z.coerce.number().int().min(0).default(0),
+        }),
         response: { 200: z.array(catalogServiceDtoSchema) },
       },
     },
-    async () => adminBranchesService.listCatalogServices()
+    async (request, reply) => {
+      const result = await adminBranchesService.listCatalogServices(request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.post(
@@ -609,10 +649,18 @@ export async function adminRoutes(app: FastifyInstance) {
         summary: "List configured services for a branch",
         security,
         params: idParam,
+        querystring: z.object({
+          limit: z.coerce.number().int().min(1).max(200).default(50),
+          offset: z.coerce.number().int().min(0).default(0),
+        }),
         response: { 200: z.array(adminBranchServiceDtoSchema) },
       },
     },
-    async (request) => adminBranchesService.listBranchServices(request.params.id)
+    async (request, reply) => {
+      const result = await adminBranchesService.listBranchServices(request.params.id, request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.post(
@@ -683,7 +731,11 @@ export async function adminRoutes(app: FastifyInstance) {
         response: { 200: z.array(adminOrderSummaryDtoSchema) },
       },
     },
-    async (request) => adminOrdersService.listOrders(request.query)
+    async (request, reply) => {
+      const result = await adminOrdersService.listOrders(request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.get(
@@ -752,7 +804,11 @@ export async function adminRoutes(app: FastifyInstance) {
         response: { 200: z.array(adminCustomerDtoSchema) },
       },
     },
-    async (request) => adminOrdersService.listCustomers(request.query)
+    async (request, reply) => {
+      const result = await adminOrdersService.listCustomers(request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.get(
@@ -878,10 +934,18 @@ export async function adminRoutes(app: FastifyInstance) {
         tags: ["Admin Reconciliation"],
         summary: "Get all cash reconciliation transactions across branches",
         security,
+        querystring: z.object({
+          limit: z.coerce.number().int().min(1).max(200).default(50),
+          offset: z.coerce.number().int().min(0).default(0),
+        }),
         response: { 200: z.array(adminReconciliationDtoSchema) },
       },
     },
-    async () => adminReconciliationService.getAllReconciliations()
+    async (request, reply) => {
+      const result = await adminReconciliationService.getAllReconciliations(request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.get(
@@ -892,10 +956,18 @@ export async function adminRoutes(app: FastifyInstance) {
         tags: ["Admin Reconciliation"],
         summary: "Get all cash deductions recorded across branches",
         security,
+        querystring: z.object({
+          limit: z.coerce.number().int().min(1).max(200).default(50),
+          offset: z.coerce.number().int().min(0).default(0),
+        }),
         response: { 200: z.array(adminDeductionDtoSchema) },
       },
     },
-    async () => adminReconciliationService.getAllDeductions()
+    async (request, reply) => {
+      const result = await adminReconciliationService.getAllDeductions(request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.get(
@@ -910,11 +982,17 @@ export async function adminRoutes(app: FastifyInstance) {
           branchId: z.string().uuid().optional(),
           startDate: z.string().optional(),
           endDate: z.string().optional(),
+          limit: z.coerce.number().int().min(1).max(200).default(50),
+          offset: z.coerce.number().int().min(0).default(0),
         }),
         response: { 200: z.array(adminDailyReportDtoSchema) },
       },
     },
-    async (request) => adminReconciliationService.getAllDailyReports(request.query)
+    async (request, reply) => {
+      const result = await adminReconciliationService.getAllDailyReports(request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.get(
@@ -963,7 +1041,11 @@ export async function adminRoutes(app: FastifyInstance) {
         response: { 200: z.array(adminLoyaltyTransactionDtoSchema) },
       },
     },
-    async (request) => adminLoyaltyService.getLoyaltyTransactions(request.query)
+    async (request, reply) => {
+      const result = await adminLoyaltyService.getLoyaltyTransactions(request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.post(
@@ -1007,7 +1089,11 @@ export async function adminRoutes(app: FastifyInstance) {
         response: { 200: z.array(adminVoucherDtoSchema) },
       },
     },
-    async (request) => adminLoyaltyService.listVouchers(request.query)
+    async (request, reply) => {
+      const result = await adminLoyaltyService.listVouchers(request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.post(
@@ -1067,10 +1153,18 @@ export async function adminRoutes(app: FastifyInstance) {
         tags: ["Admin Vouchers"],
         summary: "List voucher batches with total, used, and available counts",
         security,
+        querystring: z.object({
+          limit: z.coerce.number().int().min(1).max(200).default(50),
+          offset: z.coerce.number().int().min(0).default(0),
+        }),
         response: { 200: z.array(adminVoucherBatchDtoSchema) },
       },
     },
-    async () => adminLoyaltyService.listVoucherBatches()
+    async (request, reply) => {
+      const result = await adminLoyaltyService.listVoucherBatches(request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.post(
@@ -1121,11 +1215,19 @@ export async function adminRoutes(app: FastifyInstance) {
         tags: ["Admin Inventory"],
         summary: "List inventory items across branches or filter by branch",
         security,
-        querystring: z.object({ branchId: z.string().uuid().optional() }),
+        querystring: z.object({
+          branchId: z.string().uuid().optional(),
+          limit: z.coerce.number().int().min(1).max(200).default(50),
+          offset: z.coerce.number().int().min(0).default(0),
+        }),
         response: { 200: z.array(adminInventoryItemDtoSchema) },
       },
     },
-    async (request) => adminOperationsService.listInventory(request.query.branchId)
+    async (request, reply) => {
+      const result = await adminOperationsService.listInventory(request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.post(
@@ -1186,11 +1288,17 @@ export async function adminRoutes(app: FastifyInstance) {
         querystring: z.object({
           branchId: z.string().uuid().optional(),
           status: z.enum(["open", "fixed"]).optional(),
+          limit: z.coerce.number().int().min(1).max(200).default(50),
+          offset: z.coerce.number().int().min(0).default(0),
         }),
         response: { 200: z.array(adminMaintenanceTicketDtoSchema) },
       },
     },
-    async (request) => adminOperationsService.listMaintenanceTickets(request.query.branchId, request.query.status)
+    async (request, reply) => {
+      const result = await adminOperationsService.listMaintenanceTickets(request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.post(
@@ -1235,11 +1343,16 @@ export async function adminRoutes(app: FastifyInstance) {
         querystring: z.object({
           recipientType: z.string().optional(),
           limit: z.coerce.number().int().min(1).max(200).default(50),
+          offset: z.coerce.number().int().min(0).default(0),
         }),
         response: { 200: z.array(adminNotificationDtoSchema) },
       },
     },
-    async (request) => adminOperationsService.listNotifications(request.query)
+    async (request, reply) => {
+      const result = await adminOperationsService.listNotifications(request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.post(
@@ -1323,11 +1436,19 @@ export async function adminRoutes(app: FastifyInstance) {
         tags: ["Admin Headlines"],
         summary: "List banner headlines/announcements",
         security,
-        querystring: z.object({ branchId: z.string().uuid().optional() }),
+        querystring: z.object({
+          branchId: z.string().uuid().optional(),
+          limit: z.coerce.number().int().min(1).max(200).default(50),
+          offset: z.coerce.number().int().min(0).default(0),
+        }),
         response: { 200: z.array(adminHeadlineDtoSchema) },
       },
     },
-    async (request) => adminOperationsService.listHeadlines(request.query.branchId)
+    async (request, reply) => {
+      const result = await adminOperationsService.listHeadlines(request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.post(
@@ -1378,6 +1499,10 @@ export async function adminRoutes(app: FastifyInstance) {
         response: { 200: z.array(adminAuditLogDtoSchema) },
       },
     },
-    async (request) => adminOperationsService.listAuditLogs(request.query)
+    async (request, reply) => {
+      const result = await adminOperationsService.listAuditLogs(request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 }

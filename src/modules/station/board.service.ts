@@ -120,37 +120,47 @@ async function reportFault(
   return { ...toTicketDto(ticket, name), duplicate: !created };
 }
 
-async function listTickets(station: StationContext, q: { status?: "open" | "fixed"; limit: number }) {
-  const rows = await db
+async function listTickets(station: StationContext, q: { status?: "open" | "fixed"; limit: number; offset: number }) {
+  const condition = and(
+    eq(maintenanceTickets.branchId, station.branchId),
+    isNull(maintenanceTickets.deletedAt),
+    q.status ? eq(maintenanceTickets.status, q.status) : undefined
+  );
+  const [rows, countRows] = await Promise.all([
+    db
     .select({ t: maintenanceTickets, reporter: attendants.name })
     .from(maintenanceTickets)
     .leftJoin(attendants, eq(attendants.id, maintenanceTickets.reportedByAttendantId))
-    .where(
-      and(
-        eq(maintenanceTickets.branchId, station.branchId),
-        isNull(maintenanceTickets.deletedAt),
-        q.status ? eq(maintenanceTickets.status, q.status) : undefined
-      )
-    )
+    .where(condition)
     .orderBy(desc(maintenanceTickets.reportedAt), desc(maintenanceTickets.id))
-    .limit(q.limit);
-  return rows.map((r) => toTicketDto(r.t, r.reporter));
+    .limit(q.limit)
+    .offset(q.offset),
+    db.select({ count: sql<number>`count(*)::int` }).from(maintenanceTickets).where(condition),
+  ]);
+  return {
+    items: rows.map((r) => toTicketDto(r.t, r.reporter)),
+    total: countRows[0]?.count ?? 0,
+  };
 }
 
 /** Notices for this branch: global ones plus this branch's own, not deleted and not expired, newest first. */
-async function activeNotices(station: StationContext) {
-  const rows = await db
+async function activeNotices(station: StationContext, query: { limit: number; offset: number }) {
+  const condition = and(
+    isNull(headlines.deletedAt),
+    gt(headlines.expiresAt, new Date()),
+    or(isNull(headlines.branchId), eq(headlines.branchId, station.branchId))
+  );
+  const [rows, countRows] = await Promise.all([
+    db
     .select()
     .from(headlines)
-    .where(
-      and(
-        isNull(headlines.deletedAt),
-        gt(headlines.expiresAt, new Date()),
-        or(isNull(headlines.branchId), eq(headlines.branchId, station.branchId))
-      )
-    )
-    .orderBy(desc(headlines.createdAt));
-  return rows.map((h) => ({
+    .where(condition)
+    .orderBy(desc(headlines.createdAt))
+    .limit(query.limit)
+    .offset(query.offset),
+    db.select({ count: sql<number>`count(*)::int` }).from(headlines).where(condition),
+  ]);
+  return { items: rows.map((h) => ({
     id: h.id,
     branchId: h.branchId,
     title: h.title,
@@ -158,7 +168,7 @@ async function activeNotices(station: StationContext) {
     priority: h.priority,
     expiresAt: h.expiresAt.toISOString(),
     createdAt: h.createdAt.toISOString(),
-  }));
+  })), total: countRows[0]?.count ?? 0 };
 }
 
 export const boardService = { reportFault, listTickets, activeNotices };

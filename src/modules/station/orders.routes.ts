@@ -31,6 +31,10 @@ import {
 
 const meta = (req: FastifyRequest) => ({ ip: req.ip, userAgent: req.headers["user-agent"] });
 const security = [{ stationToken: [] }];
+const paginationQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
 const perStationLimit = {
   rateLimit: {
     max: 300,
@@ -82,9 +86,14 @@ export async function stationOrderRoutes(app: FastifyInstance) {
         tags: ["Station orders"],
         summary: "Get active vouchers for station datalist autocomplete",
         security,
+        querystring: paginationQuery,
       },
     },
-    async (request) => svc.listActiveVouchers(requireStation(request))
+    async (request, reply) => {
+      const result = await svc.listActiveVouchers(requireStation(request), request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.get(
@@ -99,7 +108,11 @@ export async function stationOrderRoutes(app: FastifyInstance) {
         response: { 200: z.array(customerResultSchema) },
       },
     },
-    async (request) => svc.searchCustomers(request.query.q, request.query.limit)
+    async (request, reply) => {
+      const result = await svc.searchCustomers(request.query.q, request.query.limit, request.query.offset);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.post(
@@ -146,10 +159,15 @@ export async function stationOrderRoutes(app: FastifyInstance) {
         tags: ["Station orders"],
         summary: "Bag numbers currently in use at this branch",
         security,
+        querystring: paginationQuery,
         response: { 200: z.array(z.string()) },
       },
     },
-    async (request) => svc.activeBagNumbers(requireStation(request).branchId)
+    async (request, reply) => {
+      const result = await svc.activeBagNumbers(requireStation(request).branchId, request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.get(

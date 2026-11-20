@@ -177,14 +177,21 @@ export const customerService = {
   async getOrders(clerkUserId: string, query: PaginationQuery) {
     const customer = await requireCustomer(clerkUserId);
 
-    const rows = await db
+    const [rows, countRows] = await Promise.all([
+      db
       .select()
       .from(orders)
       .where(and(eq(orders.customerId, customer.id), isNull(orders.deletedAt)))
       .orderBy(desc(orders.placedAt))
-      .limit(query.limit);
+      .limit(query.limit)
+      .offset(query.offset),
+      db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(orders)
+        .where(and(eq(orders.customerId, customer.id), isNull(orders.deletedAt))),
+    ]);
 
-    return rows.map((o) => ({
+    return { items: rows.map((o) => ({
       id: o.id,
       orderNumber: o.orderNumber,
       orderType: o.orderType,
@@ -208,25 +215,29 @@ export const customerService = {
       completedAt: o.completedAt ? o.completedAt.toISOString() : null,
       createdAt: o.createdAt.toISOString(),
       updatedAt: o.updatedAt.toISOString(),
-    }));
+    })), total: countRows[0]?.count ?? 0 };
   },
 
-  async getActiveOrders(clerkUserId: string) {
+  async getActiveOrders(clerkUserId: string, query: PaginationQuery) {
     const customer = await requireCustomer(clerkUserId);
 
-    const rows = await db
+    const conditions = and(
+      eq(orders.customerId, customer.id),
+      isNull(orders.deletedAt),
+      notInArray(orders.status, ["completed", "cancelled"])
+    );
+    const [rows, countRows] = await Promise.all([
+      db
       .select()
       .from(orders)
-      .where(
-        and(
-          eq(orders.customerId, customer.id),
-          isNull(orders.deletedAt),
-          notInArray(orders.status, ["completed", "cancelled"])
-        )
-      )
-      .orderBy(desc(orders.placedAt));
+      .where(conditions)
+      .orderBy(desc(orders.placedAt))
+      .limit(query.limit)
+      .offset(query.offset),
+      db.select({ count: sql<number>`count(*)::int` }).from(orders).where(conditions),
+    ]);
 
-    return rows.map((o) => ({
+    return { items: rows.map((o) => ({
       id: o.id,
       orderNumber: o.orderNumber,
       orderType: o.orderType,
@@ -250,7 +261,7 @@ export const customerService = {
       completedAt: o.completedAt ? o.completedAt.toISOString() : null,
       createdAt: o.createdAt.toISOString(),
       updatedAt: o.updatedAt.toISOString(),
-    }));
+    })), total: countRows[0]?.count ?? 0 };
   },
 
   async getLoyaltyBalance(clerkUserId: string) {
@@ -274,39 +285,47 @@ export const customerService = {
   async getLoyaltyTransactions(clerkUserId: string, query: PaginationQuery) {
     const customer = await requireCustomer(clerkUserId);
 
-    const rows = await db
+    const [rows, countRows] = await Promise.all([
+      db
       .select()
       .from(loyaltyLedger)
       .where(eq(loyaltyLedger.customerId, customer.id))
       .orderBy(desc(loyaltyLedger.createdAt))
-      .limit(query.limit);
+      .limit(query.limit)
+      .offset(query.offset),
+      db.select({ count: sql<number>`count(*)::int` }).from(loyaltyLedger)
+        .where(eq(loyaltyLedger.customerId, customer.id)),
+    ]);
 
-    return rows.map((r) => ({
+    return { items: rows.map((r) => ({
       id: r.id,
       pointsDelta: r.pointsDelta,
       balanceAfter: r.balanceAfter,
       reason: r.reason,
       orderId: r.orderId,
       createdAt: r.createdAt.toISOString(),
-    }));
+    })), total: countRows[0]?.count ?? 0 };
   },
 
   async getNotifications(clerkUserId: string, query: PaginationQuery) {
     const customer = await requireCustomer(clerkUserId);
 
-    const rows = await db
+    const conditions = and(
+      eq(notifications.recipientType, "customer"),
+      eq(notifications.recipientId, customer.id)
+    );
+    const [rows, countRows] = await Promise.all([
+      db
       .select()
       .from(notifications)
-      .where(
-        and(
-          eq(notifications.recipientType, "customer"),
-          eq(notifications.recipientId, customer.id)
-        )
-      )
+      .where(conditions)
       .orderBy(desc(notifications.createdAt))
-      .limit(query.limit);
+      .limit(query.limit)
+      .offset(query.offset),
+      db.select({ count: sql<number>`count(*)::int` }).from(notifications).where(conditions),
+    ]);
 
-    return rows.map((n) => ({
+    return { items: rows.map((n) => ({
       id: n.id,
       title: n.title,
       message: n.message,
@@ -317,7 +336,7 @@ export const customerService = {
       isRead: n.isRead,
       readAt: n.readAt ? n.readAt.toISOString() : null,
       createdAt: n.createdAt.toISOString(),
-    }));
+    })), total: countRows[0]?.count ?? 0 };
   },
 
   async getUnreadNotificationsCount(clerkUserId: string) {
@@ -390,7 +409,8 @@ export const customerService = {
   async getPayments(clerkUserId: string, query: PaginationQuery) {
     const customer = await requireCustomer(clerkUserId);
 
-    const rows = await db
+    const [rows, countRows] = await Promise.all([
+      db
       .select({
         payment: payments,
         orderNumber: orders.orderNumber,
@@ -399,9 +419,13 @@ export const customerService = {
       .leftJoin(orders, eq(orders.id, payments.orderId))
       .where(eq(payments.customerId, customer.id))
       .orderBy(desc(payments.createdAt))
-      .limit(query.limit);
+      .limit(query.limit)
+      .offset(query.offset),
+      db.select({ count: sql<number>`count(*)::int` }).from(payments)
+        .where(eq(payments.customerId, customer.id)),
+    ]);
 
-    return rows.map((r) => ({
+    return { items: rows.map((r) => ({
       id: r.payment.id,
       orderId: r.payment.orderId,
       orderNumber: r.orderNumber,
@@ -410,6 +434,6 @@ export const customerService = {
       method: r.payment.method,
       status: r.payment.status,
       createdAt: r.payment.createdAt.toISOString(),
-    }));
+    })), total: countRows[0]?.count ?? 0 };
   },
 };

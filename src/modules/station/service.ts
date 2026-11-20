@@ -208,8 +208,16 @@ async function getSession(station: StationContext) {
 
 // ---------- Attendants & attendance ----------
 
-async function listAttendants(branchId: string) {
-  const rows = await db
+async function listAttendants(branchId: string, query: { limit: number; offset: number }) {
+  const condition = and(
+    isNull(attendants.deletedAt),
+    eq(attendants.status, "active"),
+    sql`(${attendants.branchId} = ${branchId} OR ${attendants.id} IN (
+      SELECT ${attendantBranches.attendantId} FROM ${attendantBranches}
+      WHERE ${attendantBranches.branchId} = ${branchId}))`
+  );
+  const [rows, countRows] = await Promise.all([
+    db
     .select({
       id: attendants.id,
       name: attendants.name,
@@ -225,18 +233,14 @@ async function listAttendants(branchId: string) {
       and(eq(attendanceLogs.attendantId, attendants.id), isNull(attendanceLogs.clockOutAt))
     )
     .leftJoin(branches, eq(branches.id, attendanceLogs.branchId))
-    .where(
-      and(
-        isNull(attendants.deletedAt),
-        eq(attendants.status, "active"),
-        sql`(${attendants.branchId} = ${branchId} OR ${attendants.id} IN (
-          SELECT ${attendantBranches.attendantId} FROM ${attendantBranches}
-          WHERE ${attendantBranches.branchId} = ${branchId}))`
-      )
-    )
-    .orderBy(asc(attendants.name));
+    .where(condition)
+    .orderBy(asc(attendants.name))
+    .limit(query.limit)
+    .offset(query.offset),
+    db.select({ count: sql<number>`count(*)::int` }).from(attendants).where(condition),
+  ]);
 
-  return rows.map((r) => ({
+  const items = rows.map((r) => ({
     id: r.id,
     name: r.name,
     isHomeBranch: r.homeBranchId === branchId,
@@ -249,10 +253,13 @@ async function listAttendants(branchId: string) {
         }
       : null,
   }));
+  return { items, total: countRows[0]?.count ?? 0 };
 }
 
-async function activeAttendances(branchId: string) {
-  const rows = await db
+async function activeAttendances(branchId: string, query: { limit: number; offset: number }) {
+  const condition = and(eq(attendanceLogs.branchId, branchId), isNull(attendanceLogs.clockOutAt));
+  const [rows, countRows] = await Promise.all([
+    db
     .select({
       attendanceId: attendanceLogs.id,
       attendantId: attendants.id,
@@ -261,10 +268,17 @@ async function activeAttendances(branchId: string) {
     })
     .from(attendanceLogs)
     .innerJoin(attendants, eq(attendants.id, attendanceLogs.attendantId))
-    .where(and(eq(attendanceLogs.branchId, branchId), isNull(attendanceLogs.clockOutAt)))
-    .orderBy(asc(attendanceLogs.clockInAt));
+    .where(condition)
+    .orderBy(asc(attendanceLogs.clockInAt))
+    .limit(query.limit)
+    .offset(query.offset),
+    db.select({ count: sql<number>`count(*)::int` }).from(attendanceLogs).where(condition),
+  ]);
 
-  return rows.map((r) => ({ ...r, clockInAt: r.clockInAt.toISOString() }));
+  return {
+    items: rows.map((r) => ({ ...r, clockInAt: r.clockInAt.toISOString() })),
+    total: countRows[0]?.count ?? 0,
+  };
 }
 
 type AttendantRow = typeof attendants.$inferSelect;
@@ -447,26 +461,30 @@ async function getStats(station: StationContext, query: StationStatsQuery) {
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
 
-  const branchOrders = await db
+  const conditions = [
+    eq(orders.branchId, station.branchId),
+    isNull(orders.deletedAt),
+    gte(orders.placedAt, start),
+    lte(orders.placedAt, end),
+  ];
+  const [[summary], [todaySummary], statusRows, [activeAttendantCount]] = await Promise.all([
+    db
     .select({
-      status: orders.status,
-      paymentStatus: orders.paymentStatus,
-      finalPricePesewas: orders.finalPricePesewas,
-      placedAt: orders.placedAt,
+      totalOrders: sql<number>`count(*)::int`,
+      totalRevenuePesewas: sql<string>`coalesce(sum(${orders.finalPricePesewas}) filter (where ${orders.paymentStatus} = 'paid'), 0)::text`,
     })
     .from(orders)
-    .where(
-      and(
-        eq(orders.branchId, station.branchId),
-        isNull(orders.deletedAt),
-        gte(orders.placedAt, start),
-        lte(orders.placedAt, end)
-      )
-    );
+    .where(and(...conditions)),
+    db.select({
+      count: sql<number>`count(*)::int`,
+      revenuePesewas: sql<string>`coalesce(sum(${orders.finalPricePesewas}) filter (where ${orders.paymentStatus} = 'paid'), 0)::text`,
+    }).from(orders).where(and(...conditions, gte(orders.placedAt, todayStart))),
+    db.select({ status: orders.status, count: sql<number>`count(*)::int` })
+      .from(orders).where(and(...conditions)).groupBy(orders.status),
+    db.select({ count: sql<number>`count(*)::int` }).from(attendanceLogs)
+      .where(and(eq(attendanceLogs.branchId, station.branchId), isNull(attendanceLogs.clockOutAt))),
+  ]);
 
-  let totalRevenue = 0n;
-  let todayRevenue = 0n;
-  let todayOrdersCount = 0;
   const statusCounts = {
     pending: 0,
     in_progress: 0,
@@ -476,32 +494,21 @@ async function getStats(station: StationContext, query: StationStatsQuery) {
     cancelled: 0,
   };
 
-  for (const o of branchOrders) {
-    const isPaid = o.paymentStatus === "paid";
-    if (isPaid) {
-      totalRevenue += o.finalPricePesewas;
-    }
-    if (o.placedAt >= todayStart) {
-      todayOrdersCount++;
-      if (isPaid) todayRevenue += o.finalPricePesewas;
-    }
-
-    if (o.status === "pending_dropoff") statusCounts.pending++;
-    else if (["checked_in", "sorting", "washing", "drying", "folding"].includes(o.status)) statusCounts.in_progress++;
-    else if (o.status === "ready_for_pickup") statusCounts.ready_for_pickup++;
-    else if (["out_for_delivery", "delivered"].includes(o.status)) statusCounts.delivered++;
-    else if (o.status === "completed") statusCounts.completed++;
-    else if (o.status === "cancelled") statusCounts.cancelled++;
+  for (const row of statusRows) {
+    if (row.status === "pending_dropoff") statusCounts.pending += row.count;
+    else if (["checked_in", "sorting", "washing", "drying", "folding"].includes(row.status)) statusCounts.in_progress += row.count;
+    else if (row.status === "ready_for_pickup") statusCounts.ready_for_pickup += row.count;
+    else if (["out_for_delivery", "delivered"].includes(row.status)) statusCounts.delivered += row.count;
+    else if (row.status === "completed") statusCounts.completed += row.count;
+    else if (row.status === "cancelled") statusCounts.cancelled += row.count;
   }
 
-  const activeAttendantsList = await activeAttendances(station.branchId);
-
   return {
-    totalOrders: branchOrders.length,
-    totalRevenuePesewas: totalRevenue.toString(),
-    todayOrdersCount,
-    todayRevenuePesewas: todayRevenue.toString(),
-    activeAttendantsCount: activeAttendantsList.length,
+    totalOrders: summary?.totalOrders ?? 0,
+    totalRevenuePesewas: summary?.totalRevenuePesewas ?? "0",
+    todayOrdersCount: todaySummary?.count ?? 0,
+    todayRevenuePesewas: todaySummary?.revenuePesewas ?? "0",
+    activeAttendantsCount: activeAttendantCount?.count ?? 0,
     ordersByStatus: statusCounts,
   };
 }
@@ -511,7 +518,8 @@ async function getTransactions(station: StationContext, query: StationTransactio
   if (query.startDate) conditions.push(gte(payments.createdAt, new Date(query.startDate)));
   if (query.endDate) conditions.push(lte(payments.createdAt, new Date(query.endDate)));
 
-  const rows = await db
+  const [rows, countRows] = await Promise.all([
+    db
     .select({
       payment: payments,
       orderNumber: orders.orderNumber,
@@ -523,9 +531,12 @@ async function getTransactions(station: StationContext, query: StationTransactio
     .leftJoin(customers, eq(customers.id, payments.customerId))
     .where(and(...conditions))
     .orderBy(desc(payments.createdAt))
-    .limit(query.limit);
+    .limit(query.limit)
+    .offset(query.offset),
+    db.select({ count: sql<number>`count(*)::int` }).from(payments).where(and(...conditions)),
+  ]);
 
-  return rows.map((r) => ({
+  return { items: rows.map((r) => ({
     id: r.payment.id,
     orderId: r.payment.orderId,
     orderNumber: r.orderNumber,
@@ -536,20 +547,23 @@ async function getTransactions(station: StationContext, query: StationTransactio
     method: r.payment.method,
     status: r.payment.status,
     createdAt: r.payment.createdAt.toISOString(),
-  }));
+  })), total: countRows[0]?.count ?? 0 };
 }
 
 async function getActivity(station: StationContext, query: StationActivityQuery) {
-  const rows = await db
+  const condition = sql`${auditLogs.changes}->>'branchId' = ${station.branchId} OR ${auditLogs.entityId} = ${station.branchId}`;
+  const [rows, countRows] = await Promise.all([
+    db
     .select()
     .from(auditLogs)
-    .where(
-      sql`${auditLogs.changes}->>'branchId' = ${station.branchId} OR ${auditLogs.entityId} = ${station.branchId}`
-    )
+    .where(condition)
     .orderBy(desc(auditLogs.createdAt))
-    .limit(query.limit);
+    .limit(query.limit)
+    .offset(query.offset),
+    db.select({ count: sql<number>`count(*)::int` }).from(auditLogs).where(condition),
+  ]);
 
-  return rows.map((r) => ({
+  return { items: rows.map((r) => ({
     id: r.id,
     action: r.action,
     actorId: r.performedByUserId,
@@ -558,7 +572,7 @@ async function getActivity(station: StationContext, query: StationActivityQuery)
     entityId: r.entityId,
     changes: r.changes,
     createdAt: r.createdAt.toISOString(),
-  }));
+  })), total: countRows[0]?.count ?? 0 };
 }
 
 async function getAttendanceHistory(station: StationContext, query: StationAttendanceHistoryQuery) {
@@ -567,7 +581,8 @@ async function getAttendanceHistory(station: StationContext, query: StationAtten
   if (query.startDate) conditions.push(gte(attendanceLogs.clockInAt, new Date(query.startDate)));
   if (query.endDate) conditions.push(lte(attendanceLogs.clockInAt, new Date(query.endDate)));
 
-  const rows = await db
+  const [rows, countRows] = await Promise.all([
+    db
     .select({
       log: attendanceLogs,
       attendantName: attendants.name,
@@ -576,9 +591,12 @@ async function getAttendanceHistory(station: StationContext, query: StationAtten
     .innerJoin(attendants, eq(attendants.id, attendanceLogs.attendantId))
     .where(and(...conditions))
     .orderBy(desc(attendanceLogs.clockInAt))
-    .limit(query.limit);
+    .limit(query.limit)
+    .offset(query.offset),
+    db.select({ count: sql<number>`count(*)::int` }).from(attendanceLogs).where(and(...conditions)),
+  ]);
 
-  return rows.map((r) => {
+  const items = rows.map((r) => {
     const inTime = r.log.clockInAt.getTime();
     const outTime = r.log.clockOutAt?.getTime();
     const durationMinutes = outTime ? Math.round((outTime - inTime) / 60000) : null;
@@ -592,6 +610,7 @@ async function getAttendanceHistory(station: StationContext, query: StationAtten
       deviceId: r.log.deviceId,
     };
   });
+  return { items, total: countRows[0]?.count ?? 0 };
 }
 
 async function verifyActionPin(station: StationContext, input: VerifyAttendantPinInput) {
@@ -883,20 +902,23 @@ async function receiveInventory(station: StationContext, itemId: string, input: 
   return toInventoryDto(updated);
 }
 
-async function listNotifications(station: StationContext) {
-  const rows = await db
+async function listNotifications(station: StationContext, query: { limit: number; offset: number }) {
+  const condition = and(
+    eq(notifications.branchId, station.branchId),
+    eq(notifications.recipientType, "station")
+  );
+  const [rows, countRows] = await Promise.all([
+    db
     .select()
     .from(notifications)
-    .where(
-      and(
-        eq(notifications.branchId, station.branchId),
-        eq(notifications.recipientType, "station")
-      )
-    )
+    .where(condition)
     .orderBy(desc(notifications.createdAt))
-    .limit(50);
+    .limit(query.limit)
+    .offset(query.offset),
+    db.select({ count: sql<number>`count(*)::int` }).from(notifications).where(condition),
+  ]);
 
-  return rows.map((n) => ({
+  return { items: rows.map((n) => ({
     id: n.id,
     title: n.title,
     message: n.message,
@@ -907,7 +929,7 @@ async function listNotifications(station: StationContext) {
     isRead: n.isRead,
     readAt: n.readAt ? n.readAt.toISOString() : null,
     createdAt: n.createdAt.toISOString(),
-  }));
+  })), total: countRows[0]?.count ?? 0 };
 }
 
 async function getUnreadNotificationCount(station: StationContext) {
@@ -951,14 +973,20 @@ async function markAllNotificationsRead(station: StationContext) {
 
 // ---------- Machines & Services ----------
 
-async function listMachines(station: StationContext) {
-  const rows = await db
+async function listMachines(station: StationContext, query: { limit: number; offset: number }) {
+  const condition = and(eq(branchMachines.branchId, station.branchId), isNull(branchMachines.deletedAt));
+  const [rows, countRows] = await Promise.all([
+    db
     .select()
     .from(branchMachines)
-    .where(and(eq(branchMachines.branchId, station.branchId), isNull(branchMachines.deletedAt)))
-    .orderBy(asc(branchMachines.name));
+    .where(condition)
+    .orderBy(asc(branchMachines.name))
+    .limit(query.limit)
+    .offset(query.offset),
+    db.select({ count: sql<number>`count(*)::int` }).from(branchMachines).where(condition),
+  ]);
 
-  return rows.map((m) => ({
+  return { items: rows.map((m) => ({
     id: m.id,
     branchId: m.branchId,
     name: m.name,
@@ -967,17 +995,23 @@ async function listMachines(station: StationContext) {
     otherDetails: m.otherDetails,
     washPricePesewas: m.washPricePesewas.toString(),
     isActive: m.isActive,
-  }));
+  })), total: countRows[0]?.count ?? 0 };
 }
 
-async function listServices(station: StationContext) {
-  const rows = await db
+async function listServices(station: StationContext, query: { limit: number; offset: number }) {
+  const condition = and(eq(branchServices.branchId, station.branchId), isNull(branchServices.deletedAt));
+  const [rows, countRows] = await Promise.all([
+    db
     .select()
     .from(branchServices)
-    .where(and(eq(branchServices.branchId, station.branchId), isNull(branchServices.deletedAt)))
-    .orderBy(asc(branchServices.name));
+    .where(condition)
+    .orderBy(asc(branchServices.name))
+    .limit(query.limit)
+    .offset(query.offset),
+    db.select({ count: sql<number>`count(*)::int` }).from(branchServices).where(condition),
+  ]);
 
-  return rows.map((s) => ({
+  return { items: rows.map((s) => ({
     id: s.id,
     branchId: s.branchId,
     name: s.name,
@@ -988,19 +1022,25 @@ async function listServices(station: StationContext) {
     extraWashPricePesewas: s.extraWashPricePesewas ? s.extraWashPricePesewas.toString() : null,
     extraDryPricePesewas: s.extraDryPricePesewas ? s.extraDryPricePesewas.toString() : null,
     isActive: s.isActive,
-  }));
+  })), total: countRows[0]?.count ?? 0 };
 }
 
 
 // ---------- Public branch lookup (the tablet's first screen, before any login) ----------
 
-async function listActiveBranches() {
-  const rows = await db
+async function listActiveBranches(query: { limit: number; offset: number }) {
+  const condition = and(isNull(branches.deletedAt), eq(branches.isActive, true));
+  const [rows, countRows] = await Promise.all([
+    db
     .select({ code: branches.code, name: branches.name })
     .from(branches)
-    .where(and(isNull(branches.deletedAt), eq(branches.isActive, true)))
-    .orderBy(asc(branches.code));
-  return rows;
+    .where(condition)
+    .orderBy(asc(branches.code))
+    .limit(query.limit)
+    .offset(query.offset),
+    db.select({ count: sql<number>`count(*)::int` }).from(branches).where(condition),
+  ]);
+  return { items: rows, total: countRows[0]?.count ?? 0 };
 }
 
 async function getBranchByCode(rawCode: string) {

@@ -76,8 +76,9 @@ function pickAudited(input: Partial<CreateBranchInput>) {
 export class BranchService {
   constructor(private repo: BranchRepo = branchRepo) { }
 
-  async listActiveBranches() {
-    return (await this.repo.listActive()).map(toBranchDto);
+  async listActiveBranches(query: { limit: number; offset: number }) {
+    const result = await this.repo.listActive(query);
+    return { items: result.items.map(toBranchDto), total: result.total };
   }
 
   async getBranchById(id: string) {

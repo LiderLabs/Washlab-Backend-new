@@ -38,14 +38,28 @@ export async function stationCashRoutes(app: FastifyInstance) {
 
   server.get(
     "/orders",
-    { ...base, schema: { tags, summary: "Cash orders paid today", security } },
-    async (request) => cashService.todayCashOrders(requireStation(request))
+    {
+      ...base,
+      schema: { tags, summary: "Cash orders paid today", security, querystring: historyQuery },
+    },
+    async (request, reply) => {
+      const result = await cashService.todayCashOrders(requireStation(request), request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.get(
     "/deductions",
-    { ...base, schema: { tags, summary: "Cash deductions made today", security } },
-    async (request) => cashService.todayDeductions(requireStation(request))
+    {
+      ...base,
+      schema: { tags, summary: "Cash deductions made today", security, querystring: historyQuery },
+    },
+    async (request, reply) => {
+      const result = await cashService.todayDeductions(requireStation(request), request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.post(
@@ -57,7 +71,12 @@ export async function stationCashRoutes(app: FastifyInstance) {
   server.get(
     "/history",
     { ...base, schema: { tags, summary: "Per-day ledger and past sends", security, querystring: historyQuery } },
-    async (request) => cashService.history(requireStation(request), request.query.limit)
+    async (request, reply) => {
+      const result = await cashService.history(requireStation(request), request.query);
+      reply.header("X-Days-Total-Count", result.daysTotal);
+      reply.header("X-Sends-Total-Count", result.sendsTotal);
+      return result;
+    }
   );
 
   server.post(

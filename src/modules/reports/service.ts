@@ -63,16 +63,21 @@ async function getDraft(station: StationContext, date?: string) {
   return row ? toReportDto(row) : null;
 }
 
-async function list(station: StationContext, q: { startDate?: string; endDate?: string; limit: number }) {
+async function list(station: StationContext, q: { startDate?: string; endDate?: string; limit: number; offset: number }) {
   const conds = [eq(dailyReports.branchId, station.branchId)];
   if (q.startDate) conds.push(gte(dailyReports.reportDate, q.startDate));
   if (q.endDate) conds.push(lte(dailyReports.reportDate, q.endDate));
-  const rows = await db
+  const condition = and(...conds);
+  const [rows, countRows] = await Promise.all([
+    db
     .select()
     .from(dailyReports)
-    .where(and(...conds))
+    .where(condition)
     .orderBy(desc(dailyReports.reportDate))
-    .limit(q.limit);
+    .limit(q.limit)
+    .offset(q.offset),
+    db.select({ count: sql<number>`count(*)::int` }).from(dailyReports).where(condition),
+  ]);
 
   const prices = await db
     .select({ code: branchServices.code, price: branchServices.pricePesewas })
@@ -80,7 +85,10 @@ async function list(station: StationContext, q: { startDate?: string; endDate?: 
     .where(and(eq(branchServices.branchId, station.branchId), sql`${branchServices.deletedAt} IS NULL`));
   const washer = Number(prices.find((p) => p.code === "wash_only")?.price ?? FALLBACK_UNIT_PRICE_PESEWAS);
   const dryer = Number(prices.find((p) => p.code === "dry_only")?.price ?? FALLBACK_UNIT_PRICE_PESEWAS);
-  return rows.map((r) => ({ ...toReportDto(r), washerPricePesewas: washer, dryerPricePesewas: dryer }));
+  return {
+    items: rows.map((r) => ({ ...toReportDto(r), washerPricePesewas: washer, dryerPricePesewas: dryer })),
+    total: countRows[0]?.count ?? 0,
+  };
 }
 
 type Manual = Omit<SaveDraftInput, "attendantId">;

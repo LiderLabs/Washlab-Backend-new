@@ -155,14 +155,14 @@ describe("station login", () => {
 
 describe("attendants and attendance", () => {
   it("lists active attendants for the branch, including ones assigned via attendant_branches", async () => {
-    const list = await stationService.listAttendants(b1);
-    const ids = list.map((a) => a.id);
+    const list = await stationService.listAttendants(b1, { limit: 50, offset: 0 });
+    const ids = list.items.map((a) => a.id);
     expect(ids).toContain(home);
     expect(ids).toContain(roamer);
     expect(ids).not.toContain(outsider);
     expect(ids).not.toContain(suspended);
-    expect(list.find((a) => a.id === home)!.isHomeBranch).toBe(true);
-    expect(list.find((a) => a.id === roamer)!.isHomeBranch).toBe(false);
+    expect(list.items.find((a) => a.id === home)!.isHomeBranch).toBe(true);
+    expect(list.items.find((a) => a.id === roamer)!.isHomeBranch).toBe(false);
   });
 
   it("clock-in: wrong PIN fails, right PIN works, second clock-in conflicts", async () => {
@@ -179,11 +179,11 @@ describe("attendants and attendance", () => {
       code: "ALREADY_CLOCKED_IN",
     });
 
-    const active = await stationService.activeAttendances(b1);
-    expect(active.map((a) => a.attendantId)).toContain(home);
+    const active = await stationService.activeAttendances(b1, { limit: 50, offset: 0 });
+    expect(active.items.map((a) => a.attendantId)).toContain(home);
 
     await stationService.clockOut(station, { attendanceId: ok.attendanceId, pin: ATT_PIN }, meta);
-    expect((await stationService.activeAttendances(b1)).map((a) => a.attendantId)).not.toContain(home);
+    expect((await stationService.activeAttendances(b1, { limit: 50, offset: 0 })).items.map((a) => a.attendantId)).not.toContain(home);
     await expect(
       stationService.clockOut(station, { attendanceId: ok.attendanceId, pin: ATT_PIN }, meta)
     ).rejects.toMatchObject({ code: "ATTENDANCE_NOT_FOUND" });

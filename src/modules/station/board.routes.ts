@@ -3,7 +3,7 @@ import { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { authenticateStation, requireStation, STATION_TOKEN_HEADER } from "../../platform/auth/station.js";
 import { boardService } from "./board.service.js";
-import { noticeSchema, reportFaultBody, ticketListQuery, ticketSchema } from "./board.schemas.js";
+import { noticeListQuery, noticeSchema, reportFaultBody, ticketListQuery, ticketSchema } from "./board.schemas.js";
 
 const meta = (req: FastifyRequest) => ({ ip: req.ip, userAgent: req.headers["user-agent"] });
 const security = [{ stationToken: [] }];
@@ -49,7 +49,11 @@ export async function stationBoardRoutes(app: FastifyInstance) {
         response: { 200: z.array(ticketSchema) },
       },
     },
-    async (request) => boardService.listTickets(requireStation(request), request.query)
+    async (request, reply) => {
+      const result = await boardService.listTickets(requireStation(request), request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.get(
@@ -60,9 +64,14 @@ export async function stationBoardRoutes(app: FastifyInstance) {
         tags: ["Station notices"],
         summary: "Active notices for this branch (global and branch-specific, not expired)",
         security,
+        querystring: noticeListQuery,
         response: { 200: z.array(noticeSchema) },
       },
     },
-    async (request) => boardService.activeNotices(requireStation(request))
+    async (request, reply) => {
+      const result = await boardService.activeNotices(requireStation(request), request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 }

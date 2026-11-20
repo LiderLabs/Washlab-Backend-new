@@ -39,12 +39,22 @@ export async function buildApp() {
   // Set Zod compilers
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
+  const bigIntJsonReplacer = (_key: string, value: unknown) => {
+    if (typeof value !== "bigint") return value;
+    const asNumber = Number(value);
+    return Number.isSafeInteger(asNumber) ? asNumber : value.toString();
+  };
+  app.setReplySerializer((payload) => JSON.stringify(payload, bigIntJsonReplacer));
+  app.addHook("preSerialization", async (_request, _reply, payload) =>
+    JSON.parse(JSON.stringify(payload, bigIntJsonReplacer))
+  );
 
   // Global plugins
   await app.register(cors, {
     origin: config.CORS_ORIGINS,
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    exposedHeaders: ["X-Total-Count", "X-Days-Total-Count", "X-Sends-Total-Count"],
   });
 
   await app.register(sensible);

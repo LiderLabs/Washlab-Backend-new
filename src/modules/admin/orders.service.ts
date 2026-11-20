@@ -68,7 +68,8 @@ export const adminOrdersService = {
     const limit = query.limit ?? 50;
     const offset = query.offset ?? 0;
 
-    const rows = await db
+    const [rows, countRows] = await Promise.all([
+      db
       .select({
         id: orders.id,
         orderNumber: orders.orderNumber,
@@ -91,9 +92,14 @@ export const adminOrdersService = {
       .where(and(...conditions))
       .orderBy(desc(orders.createdAt))
       .limit(limit)
-      .offset(offset);
+      .offset(offset),
+      db.select({ count: sql<number>`count(*)::int` })
+        .from(orders)
+        .leftJoin(customers, eq(orders.customerId, customers.id))
+        .where(and(...conditions)),
+    ]);
 
-    return rows.map((r) => {
+    const items = rows.map((r) => {
       const finalPrice = Number(r.finalPricePesewas) / 100;
       return {
         id: r.id,
@@ -115,6 +121,7 @@ export const adminOrdersService = {
         updatedAt: r.updatedAt.toISOString(),
       };
     });
+    return { items, total: countRows[0]?.count ?? 0 };
   },
 
   async getOrderDetails(orderId: string) {
@@ -366,7 +373,8 @@ export const adminOrdersService = {
     const limit = query.limit ?? 50;
     const offset = query.offset ?? 0;
 
-    const customerList = await db
+    const [customerList, countRows] = await Promise.all([
+      db
       .select({
         id: customers.id,
         name: customers.name,
@@ -386,73 +394,33 @@ export const adminOrdersService = {
       .where(and(...conditions))
       .orderBy(desc(customers.createdAt))
       .limit(limit)
-      .offset(offset);
+      .offset(offset),
+      db.select({ count: sql<number>`count(*)::int` }).from(customers).where(and(...conditions)),
+    ]);
 
-    if (customerList.length === 0) return [];
+    if (customerList.length === 0) return { items: [], total: countRows[0]?.count ?? 0 };
 
     const customerIds = customerList.map((c) => c.id);
 
-    // Fetch order aggregation for these customers
-    const customerOrders = await db
+    const customerOrderStats = await db
       .select({
         customerId: orders.customerId,
-        status: orders.status,
-        paymentStatus: orders.paymentStatus,
-        finalPricePesewas: orders.finalPricePesewas,
-        createdAt: orders.createdAt,
-        orderNumber: orders.orderNumber,
-        branchName: branches.name,
+        orderCount: sql<number>`count(*)::int`,
+        completedCount: sql<number>`count(*) filter (where ${orders.status} = 'completed')::int`,
+        totalSpentPesewas: sql<string>`coalesce(sum(${orders.finalPricePesewas}) filter (where ${orders.paymentStatus} = 'paid'), 0)::text`,
+        lastOrderDate: sql<Date | null>`max(${orders.createdAt})`,
+        lastOrderNumber: sql<string | null>`(array_agg(${orders.orderNumber} order by ${orders.createdAt} desc))[1]`,
+        branchesSeen: sql<string | null>`string_agg(distinct ${branches.name}, ', ' order by ${branches.name})`,
       })
       .from(orders)
       .leftJoin(branches, eq(orders.branchId, branches.id))
       .where(and(inArray(orders.customerId, customerIds), isNull(orders.deletedAt)))
-      .orderBy(desc(orders.createdAt));
+      .groupBy(orders.customerId);
 
-    // Group orders by customerId
-    const statsMap = new Map<
-      string,
-      {
-        orderCount: number;
-        completedCount: number;
-        totalSpent: number;
-        lastOrderDate: string | null;
-        lastOrderNumber: string | null;
-        branchesSeen: Set<string>;
-      }
-    >();
-
-    for (const o of customerOrders) {
-      if (!o.customerId) continue;
-      const entry = statsMap.get(o.customerId) ?? {
-        orderCount: 0,
-        completedCount: 0,
-        totalSpent: 0,
-        lastOrderDate: null,
-        lastOrderNumber: null,
-        branchesSeen: new Set<string>(),
-      };
-
-      entry.orderCount += 1;
-      if (o.status === "completed") {
-        entry.completedCount += 1;
-      }
-      if (o.paymentStatus === "paid") {
-        entry.totalSpent += Number(o.finalPricePesewas) / 100;
-      }
-      if (!entry.lastOrderDate) {
-        entry.lastOrderDate = o.createdAt.toISOString();
-        entry.lastOrderNumber = o.orderNumber;
-      }
-      if (o.branchName) {
-        entry.branchesSeen.add(o.branchName);
-      }
-
-      statsMap.set(o.customerId, entry);
-    }
-
-    return customerList.map((c) => {
+    const statsMap = new Map(customerOrderStats.map((row) => [row.customerId, row]));
+    const items = customerList.map((c) => {
       const stats = statsMap.get(c.id);
-      const allBranches = stats && stats.branchesSeen.size > 0 ? Array.from(stats.branchesSeen).join(", ") : null;
+      const allBranches = stats?.branchesSeen ?? null;
 
       return {
         id: c.id,
@@ -461,7 +429,7 @@ export const adminOrdersService = {
         phoneNumber: c.phoneNumber,
         email: c.email,
         branchId: c.branchId,
-        branchName: c.branchName ?? (stats?.branchesSeen.values().next().value ?? null),
+        branchName: c.branchName ?? (allBranches?.split(", ")[0] ?? null),
         allBranches,
         status: c.status,
         statusNote: c.statusNote,
@@ -470,12 +438,13 @@ export const adminOrdersService = {
         loyaltyPoints: c.loyaltyPoints,
         orderCount: stats?.orderCount ?? 0,
         completedOrderCount: stats?.completedCount ?? 0,
-        totalSpent: Math.round((stats?.totalSpent ?? 0) * 100) / 100,
-        lastOrderDate: stats?.lastOrderDate ?? null,
+        totalSpent: Math.round((Number(stats?.totalSpentPesewas ?? 0) / 100) * 100) / 100,
+        lastOrderDate: stats?.lastOrderDate?.toISOString() ?? null,
         lastOrderNumber: stats?.lastOrderNumber ?? null,
         createdAt: c.createdAt.toISOString(),
       };
     });
+    return { items, total: countRows[0]?.count ?? 0 };
   },
 
   async getCustomerStats(branchId?: string) {
@@ -484,79 +453,75 @@ export const adminOrdersService = {
       customerConds.push(eq(customers.branchId, branchId));
     }
 
-    const allCustomers = await db
+    const [customerStats] = await db
       .select({
-        id: customers.id,
-        status: customers.status,
-        isRegistered: customers.isRegistered,
-        isVerified: customers.isVerified,
-        branchId: customers.branchId,
+        totalCustomers: sql<number>`count(*)::int`,
+        registeredCustomers: sql<number>`count(*) filter (where ${customers.isRegistered})::int`,
+        walkInCustomers: sql<number>`count(*) filter (where not ${customers.isRegistered})::int`,
+        activeCustomers: sql<number>`count(*) filter (where ${customers.status} = 'active')::int`,
+        blockedCustomers: sql<number>`count(*) filter (where ${customers.status} = 'blocked')::int`,
+        suspendedCustomers: sql<number>`count(*) filter (where ${customers.status} = 'suspended')::int`,
+        restrictedCustomers: sql<number>`count(*) filter (where ${customers.status} = 'restricted')::int`,
+        verifiedCustomers: sql<number>`count(*) filter (where ${customers.isVerified})::int`,
       })
       .from(customers)
       .where(and(...customerConds));
 
-    const totalCustomers = allCustomers.length;
-    const registeredCustomers = allCustomers.filter((c) => c.isRegistered).length;
-    const walkInCustomers = allCustomers.filter((c) => !c.isRegistered).length;
-    const activeCustomers = allCustomers.filter((c) => c.status === "active").length;
-    const blockedCustomers = allCustomers.filter((c) => c.status === "blocked").length;
-    const suspendedCustomers = allCustomers.filter((c) => c.status === "suspended").length;
-    const restrictedCustomers = allCustomers.filter((c) => c.status === "restricted").length;
-    const verifiedCustomers = allCustomers.filter((c) => c.isVerified).length;
-
-    // Order metrics
     const orderConds = [isNull(orders.deletedAt)];
     if (branchId) {
       orderConds.push(eq(orders.branchId, branchId));
     }
 
-    const recentOrders = await db
+    const [orderStats] = await db
       .select({
-        customerId: orders.customerId,
-        finalPricePesewas: orders.finalPricePesewas,
-        paymentStatus: orders.paymentStatus,
-        branchId: orders.branchId,
+        customersWithOrders: sql<number>`count(distinct ${orders.customerId})::int`,
+        revenuePesewas: sql<string>`coalesce(sum(${orders.finalPricePesewas}) filter (where ${orders.paymentStatus} = 'paid'), 0)::text`,
       })
       .from(orders)
-      .where(and(...orderConds))
-      .limit(5000);
+      .where(and(...orderConds));
 
-    const customersWithOrders = new Set<string>();
-    let totalRevenue = 0;
-
-    for (const o of recentOrders) {
-      if (o.customerId) {
-        customersWithOrders.add(o.customerId);
-      }
-      if (o.paymentStatus === "paid") {
-        totalRevenue += Number(o.finalPricePesewas) / 100;
-      }
-    }
-
-    // Branch breakdowns
     const branchList = await db
       .select({ id: branches.id, name: branches.name })
       .from(branches)
       .where(and(isNull(branches.deletedAt), eq(branches.isActive, true)));
 
-    const branchCustomerCounts = branchList.map((b) => {
-      const fromOrders = new Set(recentOrders.filter((o) => o.branchId === b.id && o.customerId).map((o) => o.customerId!));
-      const fromProfile = allCustomers.filter((c) => c.branchId === b.id).map((c) => c.id);
-      const unique = new Set([...fromOrders, ...fromProfile]);
-      return { branchId: b.id, branchName: b.name, customerCount: unique.size };
-    });
+    const branchCounts = await db.execute(sql`
+      SELECT branch_id AS "branchId", COUNT(*)::int AS "customerCount"
+      FROM (
+        SELECT ${customers.branchId} AS branch_id, ${customers.id} AS customer_id
+        FROM ${customers}
+        WHERE ${customers.deletedAt} IS NULL
+          AND ${customers.branchId} IS NOT NULL
+          ${branchId ? sql`AND ${customers.branchId} = ${branchId}` : sql``}
+        UNION
+        SELECT ${orders.branchId} AS branch_id, ${orders.customerId} AS customer_id
+        FROM ${orders}
+        WHERE ${orders.deletedAt} IS NULL
+          AND ${orders.customerId} IS NOT NULL
+          ${branchId ? sql`AND ${orders.branchId} = ${branchId}` : sql``}
+      ) AS branch_customers
+      GROUP BY branch_id
+    `);
+    const branchCountMap = new Map<string, number>(
+      branchCounts.map((row) => [String(row.branchId), Number(row.customerCount)])
+    );
+    const branchCustomerCounts = branchList.map((b) => ({
+      branchId: b.id,
+      branchName: b.name,
+      customerCount: branchCountMap.get(b.id) ?? 0,
+    }));
 
     return {
-      totalCustomers,
-      registeredCustomers,
-      walkInCustomers,
-      activeCustomers,
-      blockedCustomers,
-      suspendedCustomers,
-      restrictedCustomers,
-      verifiedCustomers,
-      customersWithActiveOrders: customersWithOrders.size,
-      totalRevenue: Math.round(totalRevenue * 100) / 100,
+      totalCustomers: customerStats?.totalCustomers ?? 0,
+      registeredCustomers: customerStats?.registeredCustomers ?? 0,
+      walkInCustomers: customerStats?.walkInCustomers ?? 0,
+      activeCustomers: customerStats?.activeCustomers ?? 0,
+      blockedCustomers: customerStats?.blockedCustomers ?? 0,
+      suspendedCustomers: customerStats?.suspendedCustomers ?? 0,
+      restrictedCustomers: customerStats?.restrictedCustomers ?? 0,
+      verifiedCustomers: customerStats?.verifiedCustomers ?? 0,
+      customersWithActiveOrders: orderStats?.customersWithOrders ?? 0,
+      totalRevenue: Math.round((Number(orderStats?.revenuePesewas ?? 0) / 100) * 100) / 100,
       branchCustomerCounts,
     };
   },

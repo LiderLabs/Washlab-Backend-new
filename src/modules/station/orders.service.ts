@@ -1,4 +1,4 @@
-import { and, desc, eq, ilike, isNull, notInArray, or, sql, SQL } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, isNull, notInArray, or, sql, SQL } from "drizzle-orm";
 import { db } from "../../platform/db/index.js";
 import { branches } from "../../platform/db/schema/branches.js";
 import { branchMachines, branchServices } from "../../platform/db/schema/catalog.js";
@@ -218,14 +218,16 @@ const audit = (
 
 // ---------- customers ----------
 
-async function searchCustomers(q: string, limit: number) {
+async function searchCustomers(q: string, limit: number, offset = 0) {
   const digits = q.replace(/\D/g, "");
   const conds: SQL[] = [ilike(customers.name, `%${likeEscape(q)}%`)];
   if (digits.length >= 4) {
     const national = digits.replace(/^(233|0)/, "");
     conds.push(sql`regexp_replace(${customers.phoneNumber}, '\\D', '', 'g') LIKE ${"%" + national + "%"}`);
   }
-  const rows = await db
+  const condition = and(isNull(customers.deletedAt), isNull(customers.anonymizedAt), or(...conds));
+  const [rows, countRows] = await Promise.all([
+    db
     .select({
       id: customers.id,
       name: customers.name,
@@ -235,10 +237,13 @@ async function searchCustomers(q: string, limit: number) {
       completedOrderCount: sql<number>`(SELECT count(*)::int FROM orders o WHERE o.customer_id = ${customers.id} AND o.deleted_at IS NULL AND o.status = 'completed')`,
     })
     .from(customers)
-    .where(and(isNull(customers.deletedAt), isNull(customers.anonymizedAt), or(...conds)))
+    .where(condition)
     .orderBy(customers.name)
-    .limit(limit);
-  return rows;
+    .limit(limit)
+    .offset(offset),
+    db.select({ count: sql<number>`count(*)::int` }).from(customers).where(condition),
+  ]);
+  return { items: rows, total: countRows[0]?.count ?? 0 };
 }
 
 /** Find a customer by phone or create one (walk-in customers have no app account yet). */
@@ -386,19 +391,25 @@ async function getOrder(station: StationContext, orderId: string) {
   };
 }
 
-async function activeBagNumbers(branchId: string) {
-  const rows = await db
-    .select({ bag: orders.bagNumber })
+async function activeBagNumbers(branchId: string, query: { limit: number; offset: number }) {
+  const condition = and(
+    eq(orders.branchId, branchId),
+    isNull(orders.deletedAt),
+    sql`${orders.bagNumber} IS NOT NULL`,
+    notInArray(orders.status, [...BAG_RELEASING_STATUSES])
+  );
+  const [rows, countRows] = await Promise.all([
+    db
+    .selectDistinct({ bag: orders.bagNumber })
     .from(orders)
-    .where(
-      and(
-        eq(orders.branchId, branchId),
-        isNull(orders.deletedAt),
-        sql`${orders.bagNumber} IS NOT NULL`,
-        notInArray(orders.status, [...BAG_RELEASING_STATUSES])
-      )
-    );
-  return rows.map((r) => r.bag!).sort();
+    .where(condition)
+    .orderBy(orders.bagNumber)
+    .limit(query.limit)
+    .offset(query.offset),
+    db.select({ count: sql<number>`count(distinct ${orders.bagNumber})::int` })
+      .from(orders).where(condition),
+  ]);
+  return { items: rows.map((r) => r.bag!).sort(), total: countRows[0]?.count ?? 0 };
 }
 
 // ---------- writes ----------
@@ -1225,9 +1236,16 @@ async function validateVoucher(
   };
 }
 
-async function listActiveVouchers(station: StationContext) {
+async function listActiveVouchers(station: StationContext, query: { limit: number; offset: number }) {
   const now = new Date();
-  const rows = await db
+  const conditions = [
+    eq(vouchers.isActive, true),
+    or(isNull(vouchers.branchId), eq(vouchers.branchId, station.branchId)),
+    or(isNull(vouchers.expiresAt), sql`${vouchers.expiresAt} > ${now}`),
+    or(isNull(vouchers.validFrom), sql`${vouchers.validFrom} <= ${now}`),
+  ];
+  const [rows, countRows] = await Promise.all([
+    db
     .select({
       id: vouchers.id,
       code: vouchers.code,
@@ -1236,23 +1254,21 @@ async function listActiveVouchers(station: StationContext) {
       discountValue: vouchers.discountValue,
     })
     .from(vouchers)
-    .where(
-      and(
-        eq(vouchers.isActive, true),
-        or(isNull(vouchers.branchId), eq(vouchers.branchId, station.branchId)),
-        or(isNull(vouchers.expiresAt), sql`${vouchers.expiresAt} > ${now}`),
-        or(isNull(vouchers.validFrom), sql`${vouchers.validFrom} <= ${now}`)
-      )
-    );
+    .where(and(...conditions))
+    .orderBy(asc(vouchers.code))
+    .limit(query.limit)
+    .offset(query.offset),
+    db.select({ count: sql<number>`count(*)::int` }).from(vouchers).where(and(...conditions)),
+  ]);
 
-  return rows.map((v) => ({
+  return { items: rows.map((v) => ({
     _id: v.id,
     id: v.id,
     code: v.code,
     name: v.name,
     discountType: v.discountType,
     discountValue: Number(v.discountValue),
-  }));
+  })), total: countRows[0]?.count ?? 0 };
 }
 
 export const stationOrdersService = {

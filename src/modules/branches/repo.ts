@@ -1,4 +1,4 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { db } from "../../platform/db/index.js";
 import { branches, NewBranch } from "../../platform/db/schema/branches.js";
 
@@ -37,12 +37,17 @@ export type BranchRow = Awaited<ReturnType<typeof branchQuery>>[number];
 
 
 export class BranchRepo {
-  async listActive(): Promise<BranchRow[]> {
-    const rows = await branchQuery().where(
-      and(isNull(branches.deletedAt), eq(branches.isActive, true))
-    );
-
-    return rows;
+  async listActive(query: { limit: number; offset: number }) {
+    const condition = and(isNull(branches.deletedAt), eq(branches.isActive, true));
+    const [items, countRows] = await Promise.all([
+      branchQuery()
+        .where(condition)
+        .orderBy(branches.code)
+        .limit(query.limit)
+        .offset(query.offset),
+      db.select({ count: sql<number>`count(*)::int` }).from(branches).where(condition),
+    ]);
+    return { items, total: countRows[0]?.count ?? 0 };
   }
 
 
