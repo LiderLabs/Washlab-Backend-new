@@ -26,6 +26,7 @@ import {
   customerSubscriptionRoutes,
   stationSubscriptionRoutes,
 } from "./modules/subscriptions/routes.js";
+import { stationEnrollmentRoutes } from "./modules/station/enrollment.routes.js";
 import { config } from "./platform/config/index.js";
 import { authenticate } from "./platform/auth/index.js";
 import { authenticateStation, STATION_TOKEN_HEADER } from "./platform/auth/station.js";
@@ -187,6 +188,7 @@ export async function buildApp() {
   await app.register(customerSubscriptionRoutes, { prefix: "/v1/customer" });
   await app.register(stationSubscriptionRoutes, { prefix: "/v1/station" });
   await app.register(adminSubscriptionRoutes, { prefix: "/v1/admin" });
+  await app.register(stationEnrollmentRoutes, { prefix: "/v1/station/enrollment" });
 
   return app;
 }

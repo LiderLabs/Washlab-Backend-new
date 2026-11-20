@@ -147,7 +147,7 @@ export async function adminRoutes(app: FastifyInstance) {
         summary: "Generate and resend a fresh enrollment link for an attendant",
         security,
         params: idParam,
-        body: z.object({ expiresInHours: z.number().int().min(1).max(720).default(72) }).optional(),
+        body: z.object({ expiresInHours: z.number().int().min(1).max(720).default(72) }).nullish(),
         response: { 200: enrollmentResultSchema },
       },
     },

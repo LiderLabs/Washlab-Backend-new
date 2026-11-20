@@ -156,7 +156,7 @@ function toOrderDto(o: OrderRow, c: CustomerRow | { id: string; name: string; ph
 }
 
 /** Realtime payloads carry ids only; the SSE stream is branch-scoped, but customer data still stays out of events. */
-function notifyBranch(branchId: string, event: string, order: { id: string; status: string }) {
+export function notifyBranch(branchId: string, event: string, order: { id: string; status: string }) {
   void broadcastRealtimeEvent(`branch:${branchId}`, event, { orderId: order.id, status: order.status });
 }
 

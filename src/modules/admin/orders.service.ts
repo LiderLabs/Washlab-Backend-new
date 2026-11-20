@@ -3,9 +3,11 @@ import { db } from "../../platform/db/index.js";
 import { orders, orderStatusEvents, orderStatusEnum } from "../../platform/db/schema/orders.js";
 import { customers } from "../../platform/db/schema/customers.js";
 import { branches } from "../../platform/db/schema/branches.js";
-import { loyaltyLedger } from "../../platform/db/schema/loyalty.js";
+import { payments } from "../../platform/db/schema/payments.js";
+import { runCompletionEffects } from "../station/completion.js";
+import { notifyBranch } from "../station/orders.service.js";
 import { auditLogs } from "../../platform/db/schema/infrastructure.js";
-import { BadRequestError, NotFoundError } from "../../platform/errors/index.js";
+import { BadRequestError, ConflictError, NotFoundError } from "../../platform/errors/index.js";
 import type { AuthenticatedUser } from "../../platform/auth/index.js";
 import { csvCell } from "./data.service.js";
 
@@ -230,6 +232,10 @@ export const adminOrdersService = {
     };
   },
 
+  /**
+   * Admin override: like the original, an admin can set any status (to fix a mistake), but the change is made
+   * under a row lock and completion does what it does at the station.
+   */
   async updateOrderStatus(
     actor: AuthenticatedUser,
     orderId: string,
@@ -237,26 +243,29 @@ export const adminOrdersService = {
     notes?: string,
     meta?: RequestMeta
   ) {
-    const [order] = await db
-      .select()
-      .from(orders)
-      .where(and(eq(orders.id, orderId), isNull(orders.deletedAt)))
-      .limit(1);
+    const result = await db.transaction(async (tx) => {
+      const [order] = await tx
+        .select()
+        .from(orders)
+        .where(and(eq(orders.id, orderId), isNull(orders.deletedAt)))
+        .limit(1)
+        .for("update");
+      if (!order) throw new NotFoundError("Order not found", "ORDER_NOT_FOUND");
+      if (order.status === newStatus) throw new ConflictError("Order is already in that status", "STATUS_UNCHANGED");
 
-    if (!order) throw new NotFoundError("Order not found", "ORDER_NOT_FOUND");
-
-    const oldStatus = order.status;
-    const now = new Date();
-
-    return await db.transaction(async (tx) => {
-      await tx
+      const oldStatus = order.status;
+      const now = new Date();
+      const [row] = await tx
         .update(orders)
         .set({
           status: newStatus as any,
-          completedAt: newStatus === "completed" ? now : order.completedAt,
+          // Set the first time an order completes and kept if an admin reopens it, so "has this order completed
+          // before?" stays answerable.
+          completedAt: newStatus === "completed" ? (order.completedAt ?? now) : order.completedAt,
           updatedAt: now,
         })
-        .where(eq(orders.id, orderId));
+        .where(eq(orders.id, orderId))
+        .returning();
 
       await tx.insert(orderStatusEvents).values({
         orderId,
@@ -268,37 +277,9 @@ export const adminOrdersService = {
         createdAt: now,
       });
 
-      // Award loyalty points if completed
-      if (newStatus === "completed" && oldStatus !== "completed" && order.customerId) {
-        try {
-          const [cust] = await tx
-            .select({ loyaltyPoints: customers.loyaltyPoints })
-            .from(customers)
-            .where(eq(customers.id, order.customerId))
-            .limit(1);
-
-          const newBalance = (cust?.loyaltyPoints ?? 0) + 1;
-
-          await tx
-            .update(customers)
-            .set({
-              loyaltyPoints: newBalance,
-              updatedAt: now,
-            })
-            .where(eq(customers.id, order.customerId));
-
-          await tx.insert(loyaltyLedger).values({
-            customerId: order.customerId,
-            orderId,
-            pointsDelta: 1,
-            balanceAfter: newBalance,
-            reason: "order_completed",
-            createdAt: now,
-          });
-        } catch (err) {
-          console.error("Failed to credit loyalty points:", err);
-        }
-      }
+      // Same effects as the station (loyalty point, inventory, milestone), once per order: an order an admin
+      // reopens and completes again has already had them.
+      if (newStatus === "completed" && !order.completedAt) await runCompletionEffects(tx, row!);
 
       await writeAudit(
         tx,
@@ -310,24 +291,37 @@ export const adminOrdersService = {
         meta
       );
 
-      return { success: true, orderId, status: newStatus };
+      return { success: true, orderId, status: newStatus, branchId: order.branchId, order: row! };
     });
+    notifyBranch(result.branchId, "order.updated", result.order);
+    return { success: result.success, orderId: result.orderId, status: result.status };
   },
 
+  /** Soft delete, as in the original, except an order with money recorded against it is refused: its payments
+   *  and the branch's cash ledger would keep counting it. Cancel it instead. */
   async deleteOrder(actor: AuthenticatedUser, orderId: string, meta?: RequestMeta) {
-    const [order] = await db
-      .select()
-      .from(orders)
-      .where(and(eq(orders.id, orderId), isNull(orders.deletedAt)))
-      .limit(1);
-
-    if (!order) throw new NotFoundError("Order not found", "ORDER_NOT_FOUND");
-
     return await db.transaction(async (tx) => {
-      await tx
-        .update(orders)
-        .set({ deletedAt: new Date(), updatedAt: new Date() })
-        .where(eq(orders.id, orderId));
+      const [order] = await tx
+        .select()
+        .from(orders)
+        .where(and(eq(orders.id, orderId), isNull(orders.deletedAt)))
+        .limit(1)
+        .for("update");
+      if (!order) throw new NotFoundError("Order not found", "ORDER_NOT_FOUND");
+
+      const [paid] = await tx
+        .select({ id: payments.id })
+        .from(payments)
+        .where(and(eq(payments.orderId, orderId), eq(payments.status, "paid")))
+        .limit(1);
+      if (paid || order.paymentStatus === "paid") {
+        throw new ConflictError(
+          "This order has a payment recorded and can't be deleted. Cancel it instead.",
+          "ORDER_HAS_PAYMENT"
+        );
+      }
+
+      await tx.update(orders).set({ deletedAt: new Date(), updatedAt: new Date() }).where(eq(orders.id, orderId));
 
       await writeAudit(
         tx,

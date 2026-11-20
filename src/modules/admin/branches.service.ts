@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNull, notInArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, notInArray, sql, gte } from "drizzle-orm";
 import { db } from "../../platform/db/index.js";
 import { branches, Branch } from "../../platform/db/schema/branches.js";
 import { branchMachines, branchServices, services } from "../../platform/db/schema/catalog.js";
@@ -122,7 +122,7 @@ export const adminBranchesService = {
 
     // Today's orders per branch
     const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    todayStart.setUTCHours(0, 0, 0, 0);
 
     const todayOrderCounts = await db
       .select({
@@ -133,7 +133,7 @@ export const adminBranchesService = {
       .where(
         and(
           inArray(orders.branchId, branchIds),
-          sql`${orders.createdAt} >= ${todayStart}`,
+          gte(orders.createdAt, todayStart),
           isNull(orders.deletedAt)
         )
       )
@@ -173,12 +173,12 @@ export const adminBranchesService = {
       .where(and(eq(branchMachines.branchId, id), isNull(branchMachines.deletedAt)));
 
     const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    todayStart.setUTCHours(0, 0, 0, 0);
 
     const [todayOrderCount] = await db
       .select({ count: sql<number>`count(*)::int` })
       .from(orders)
-      .where(and(eq(orders.branchId, id), sql`${orders.createdAt} >= ${todayStart}`, isNull(orders.deletedAt)));
+      .where(and(eq(orders.branchId, id), gte(orders.createdAt, todayStart), isNull(orders.deletedAt)));
 
     return toBranchDto(branch, {
       activeAttendantsCount: attendantCount?.count ?? 0,
