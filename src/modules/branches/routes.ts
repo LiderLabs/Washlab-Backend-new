@@ -15,10 +15,18 @@ export async function branchRoutes(app: FastifyInstance) {
       schema: {
         tags: ["Branches"],
         summary: "List all active branches",
+        querystring: z.object({
+          limit: z.coerce.number().int().min(1).max(100).default(50),
+          offset: z.coerce.number().int().min(0).default(0),
+        }),
         response: { 200: z.array(branchDtoSchema) },
       },
     },
-    async () => branchService.listActiveBranches()
+    async (request, reply) => {
+      const result = await branchService.listActiveBranches(request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   // Get branch by code (public, safe DTO for station login)
@@ -57,11 +65,17 @@ export async function branchRoutes(app: FastifyInstance) {
         tags: ["Branches"],
         summary: "Get active services configured for this branch",
         params: z.object({ id: z.string().uuid() }),
+        querystring: z.object({
+          limit: z.coerce.number().int().min(1).max(100).default(50),
+          offset: z.coerce.number().int().min(0).default(0),
+        }),
       },
     },
-    async (request) => {
+    async (request, reply) => {
       const { catalogService } = await import("../catalog/service.js");
-      return catalogService.getBranchServices(request.params.id);
+      const result = await catalogService.getBranchServices(request.params.id, request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
     }
   );
 

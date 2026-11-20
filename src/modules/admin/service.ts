@@ -64,7 +64,7 @@ export const adminStaffService = {
     };
   },
 
-  async listAttendants(query: { branchId?: string; status?: "invited" | "active" | "suspended" | "locked"; limit?: number }) {
+  async listAttendants(query: { branchId?: string; status?: "invited" | "active" | "suspended" | "locked"; limit?: number; offset?: number }) {
     const conds = [isNull(attendants.deletedAt)];
     if (query.branchId) {
       conds.push(eq(attendants.branchId, query.branchId));
@@ -73,7 +73,8 @@ export const adminStaffService = {
       conds.push(eq(attendants.status, query.status));
     }
 
-    const rows = await db
+    const [rows, countRows] = await Promise.all([
+      db
       .select({
         attendant: attendants,
         branch: branches,
@@ -82,9 +83,13 @@ export const adminStaffService = {
       .innerJoin(branches, eq(branches.id, attendants.branchId))
       .where(and(...conds))
       .orderBy(asc(attendants.name))
-      .limit(query.limit ?? 50);
+      .limit(query.limit ?? 50)
+      .offset(query.offset ?? 0),
+      db.select({ count: sql<number>`count(*)::int` })
+        .from(attendants).innerJoin(branches, eq(branches.id, attendants.branchId)).where(and(...conds)),
+    ]);
 
-    if (rows.length === 0) return [];
+    if (rows.length === 0) return { items: [], total: countRows[0]?.count ?? 0 };
 
     const attendantIds = rows.map((r) => r.attendant.id);
     const extraBranches = await db
@@ -102,7 +107,7 @@ export const adminStaffService = {
       extraMap.set(eb.attendantId, list);
     }
 
-    return rows.map((r) => {
+    const items = rows.map((r) => {
       const allBranchIds = Array.from(new Set([r.attendant.branchId, ...(extraMap.get(r.attendant.id) ?? [])]));
       return {
         _id: r.attendant.id,
@@ -124,6 +129,7 @@ export const adminStaffService = {
         updatedAt: r.attendant.updatedAt.toISOString(),
       };
     });
+    return { items, total: countRows[0]?.count ?? 0 };
   },
 
   async createAttendantEnrollment(

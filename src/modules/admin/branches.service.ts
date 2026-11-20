@@ -61,19 +61,27 @@ function toBranchDto(b: Branch, stats?: { activeAttendantsCount: number; todayOr
 
 export const adminBranchesService = {
   // --- Branches ---
-  async listBranches(includeInactive: boolean = false) {
+  async listBranches(
+    includeInactive: boolean = false,
+    pagination: { limit?: number; offset?: number } = {}
+  ) {
     const conditions = [isNull(branches.deletedAt)];
     if (!includeInactive) {
       conditions.push(eq(branches.isActive, true));
     }
 
-    const branchList = await db
+    const [branchList, countRows] = await Promise.all([
+      db
       .select()
       .from(branches)
       .where(and(...conditions))
-      .orderBy(asc(branches.name));
+      .orderBy(asc(branches.name))
+      .limit(pagination.limit ?? 50)
+      .offset(pagination.offset ?? 0),
+      db.select({ count: sql<number>`count(*)::int` }).from(branches).where(and(...conditions)),
+    ]);
 
-    if (branchList.length === 0) return [];
+    if (branchList.length === 0) return { items: [], total: countRows[0]?.count ?? 0 };
 
     const branchIds = branchList.map((b) => b.id);
 
@@ -133,13 +141,14 @@ export const adminBranchesService = {
 
     const todayOrderCountMap = new Map(todayOrderCounts.map((o) => [o.branchId, o.count]));
 
-    return branchList.map((b) =>
+    const items = branchList.map((b) =>
       toBranchDto(b, {
         activeAttendantsCount: attendantCountMap.get(b.id) ?? 0,
         todayOrdersCount: todayOrderCountMap.get(b.id) ?? 0,
         machinesCount: machineCountMap.get(b.id) ?? 0,
       })
     );
+    return { items, total: countRows[0]?.count ?? 0 };
   },
 
   async getBranchById(id: string) {
@@ -600,19 +609,28 @@ export const adminBranchesService = {
   },
 
   // --- Branch Machines ---
-  async listMachinesByBranch(branchId: string, onlyActive?: boolean) {
+  async listMachinesByBranch(
+    branchId: string,
+    onlyActive?: boolean,
+    pagination: { limit?: number; offset?: number } = {}
+  ) {
     const conditions = [eq(branchMachines.branchId, branchId), isNull(branchMachines.deletedAt)];
     if (onlyActive) {
       conditions.push(eq(branchMachines.isActive, true));
     }
 
-    const rows = await db
+    const [rows, countRows] = await Promise.all([
+      db
       .select()
       .from(branchMachines)
       .where(and(...conditions))
-      .orderBy(asc(branchMachines.name));
+      .orderBy(asc(branchMachines.name))
+      .limit(pagination.limit ?? 50)
+      .offset(pagination.offset ?? 0),
+      db.select({ count: sql<number>`count(*)::int` }).from(branchMachines).where(and(...conditions)),
+    ]);
 
-    return rows.map((m) => ({
+    return { items: rows.map((m) => ({
       id: m.id,
       _id: m.id,
       branchId: m.branchId,
@@ -624,7 +642,7 @@ export const adminBranchesService = {
       washPricePesewas: m.washPricePesewas.toString(),
       isActive: m.isActive,
       createdAt: m.createdAt.toISOString(),
-    }));
+    })), total: countRows[0]?.count ?? 0 };
   },
 
   async createMachine(
@@ -792,14 +810,20 @@ export const adminBranchesService = {
   },
 
   // --- Catalog Services ---
-  async listCatalogServices() {
-    const rows = await db
+  async listCatalogServices(pagination: { limit?: number; offset?: number } = {}) {
+    const condition = isNull(services.deletedAt);
+    const [rows, countRows] = await Promise.all([
+      db
       .select()
       .from(services)
-      .where(isNull(services.deletedAt))
-      .orderBy(asc(services.name));
+      .where(condition)
+      .orderBy(asc(services.name))
+      .limit(pagination.limit ?? 50)
+      .offset(pagination.offset ?? 0),
+      db.select({ count: sql<number>`count(*)::int` }).from(services).where(condition),
+    ]);
 
-    return rows.map((s) => ({
+    return { items: rows.map((s) => ({
       id: s.id,
       _id: s.id,
       name: s.name,
@@ -811,7 +835,7 @@ export const adminBranchesService = {
       pricingType: s.pricingType,
       isActive: s.isActive,
       createdAt: s.createdAt.toISOString(),
-    }));
+    })), total: countRows[0]?.count ?? 0 };
   },
 
   async createCatalogService(
@@ -980,14 +1004,20 @@ export const adminBranchesService = {
   },
 
   // --- Branch Services ---
-  async listBranchServices(branchId: string) {
-    const rows = await db
+  async listBranchServices(branchId: string, pagination: { limit?: number; offset?: number } = {}) {
+    const condition = and(eq(branchServices.branchId, branchId), isNull(branchServices.deletedAt));
+    const [rows, countRows] = await Promise.all([
+      db
       .select()
       .from(branchServices)
-      .where(and(eq(branchServices.branchId, branchId), isNull(branchServices.deletedAt)))
-      .orderBy(asc(branchServices.name));
+      .where(condition)
+      .orderBy(asc(branchServices.name))
+      .limit(pagination.limit ?? 50)
+      .offset(pagination.offset ?? 0),
+      db.select({ count: sql<number>`count(*)::int` }).from(branchServices).where(condition),
+    ]);
 
-    return rows.map((s) => ({
+    return { items: rows.map((s) => ({
       id: s.id,
       _id: s.id,
       branchId: s.branchId,
@@ -1004,7 +1034,7 @@ export const adminBranchesService = {
       isActive: s.isActive,
       showOnCustomerSide: s.showOnCustomerSide,
       createdAt: s.createdAt.toISOString(),
-    }));
+    })), total: countRows[0]?.count ?? 0 };
   },
 
   async createBranchService(

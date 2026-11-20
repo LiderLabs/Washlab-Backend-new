@@ -15,6 +15,7 @@ export const listAttendantsQuerySchema = z.object({
   branchId: z.string().uuid().optional(),
   status: attendantStatusEnum.optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
 });
 
 export const attendantDetailSchema = z.object({
@@ -100,6 +101,8 @@ export const adminBranchDtoSchema = z.object({
 
 export const listBranchesQuerySchema = z.object({
   includeInactive: z.preprocess((val) => val === "true" || val === true, z.boolean()).optional().default(false),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
 });
 
 export const adminCreateBranchSchema = z.object({

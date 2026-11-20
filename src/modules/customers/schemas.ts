@@ -107,7 +107,7 @@ export const customerPaymentSchema = z.object({
 
 export const paginationQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
-  cursor: z.string().optional(),
+  offset: z.coerce.number().int().min(0).default(0),
 });
 
 export type RegisterCustomerInput = z.infer<typeof registerCustomerSchema>;

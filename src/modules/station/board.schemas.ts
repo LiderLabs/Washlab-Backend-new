@@ -14,6 +14,12 @@ export const reportFaultBody = z
 export const ticketListQuery = z.object({
   status: z.enum(["open", "fixed"]).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(100),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
+export const noticeListQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(100),
+  offset: z.coerce.number().int().min(0).default(0),
 });
 
 export const ticketSchema = z.object({

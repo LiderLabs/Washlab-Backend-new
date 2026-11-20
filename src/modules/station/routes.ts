@@ -51,6 +51,10 @@ const perStationLimit = {
 const security = [{ stationToken: [] }];
 const base = { onRequest: [authenticateStation], config: perStationLimit };
 const idParam = z.object({ id: z.string().uuid() });
+const notificationPaginationQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
 
 export async function stationRoutes(app: FastifyInstance) {
   const server = app.withTypeProvider<ZodTypeProvider>();
@@ -66,10 +70,15 @@ export async function stationRoutes(app: FastifyInstance) {
       schema: {
         tags: ["Station"],
         summary: "Active branches (code and name) for the station login screen",
+        querystring: notificationPaginationQuery,
         response: { 200: z.array(activeBranchSchema) },
       },
     },
-    async () => stationService.listActiveBranches()
+    async (request, reply) => {
+      const result = await stationService.listActiveBranches(request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.get(
@@ -170,7 +179,11 @@ export async function stationRoutes(app: FastifyInstance) {
         response: { 200: z.array(stationTransactionSchema) },
       },
     },
-    async (request) => stationService.getTransactions(requireStation(request), request.query)
+    async (request, reply) => {
+      const result = await stationService.getTransactions(requireStation(request), request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.get(
@@ -185,7 +198,11 @@ export async function stationRoutes(app: FastifyInstance) {
         response: { 200: z.array(stationActivityLogSchema) },
       },
     },
-    async (request) => stationService.getActivity(requireStation(request), request.query)
+    async (request, reply) => {
+      const result = await stationService.getActivity(requireStation(request), request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.get(
@@ -196,10 +213,15 @@ export async function stationRoutes(app: FastifyInstance) {
         tags: ["Station"],
         summary: "Attendants who can clock in at this branch",
         security,
+        querystring: notificationPaginationQuery,
         response: { 200: z.array(stationAttendantSchema) },
       },
     },
-    async (request) => stationService.listAttendants(requireStation(request).branchId)
+    async (request, reply) => {
+      const result = await stationService.listAttendants(requireStation(request).branchId, request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.get(
@@ -210,10 +232,15 @@ export async function stationRoutes(app: FastifyInstance) {
         tags: ["Station"],
         summary: "Attendants currently clocked in at this branch",
         security,
+        querystring: notificationPaginationQuery,
         response: { 200: z.array(activeAttendanceSchema) },
       },
     },
-    async (request) => stationService.activeAttendances(requireStation(request).branchId)
+    async (request, reply) => {
+      const result = await stationService.activeAttendances(requireStation(request).branchId, request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.get(
@@ -228,7 +255,11 @@ export async function stationRoutes(app: FastifyInstance) {
         response: { 200: z.array(stationAttendanceHistoryItemSchema) },
       },
     },
-    async (request) => stationService.getAttendanceHistory(requireStation(request), request.query)
+    async (request, reply) => {
+      const result = await stationService.getAttendanceHistory(requireStation(request), request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.post(
@@ -381,10 +412,15 @@ export async function stationRoutes(app: FastifyInstance) {
         tags: ["Station"],
         summary: "List notifications for this station",
         security,
+        querystring: notificationPaginationQuery,
         response: { 200: z.array(stationNotificationSchema) },
       },
     },
-    async (request) => stationService.listNotifications(requireStation(request))
+    async (request, reply) => {
+      const result = await stationService.listNotifications(requireStation(request), request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.get(
@@ -440,10 +476,15 @@ export async function stationRoutes(app: FastifyInstance) {
         tags: ["Station"],
         summary: "List active machines for this branch",
         security,
+        querystring: notificationPaginationQuery,
         response: { 200: z.array(stationMachineSchema) },
       },
     },
-    async (request) => stationService.listMachines(requireStation(request))
+    async (request, reply) => {
+      const result = await stationService.listMachines(requireStation(request), request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.get(
@@ -454,9 +495,14 @@ export async function stationRoutes(app: FastifyInstance) {
         tags: ["Station"],
         summary: "List active services for this branch",
         security,
+        querystring: notificationPaginationQuery,
         response: { 200: z.array(stationServiceSchema) },
       },
     },
-    async (request) => stationService.listServices(requireStation(request))
+    async (request, reply) => {
+      const result = await stationService.listServices(requireStation(request), request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 }

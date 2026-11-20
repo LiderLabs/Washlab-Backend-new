@@ -5,6 +5,10 @@ import { catalogService } from "./service.js";
 
 export async function catalogRoutes(app: FastifyInstance) {
   const server = app.withTypeProvider<ZodTypeProvider>();
+  const paginationQuery = z.object({
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+    offset: z.coerce.number().int().min(0).default(0),
+  });
 
   // Public: List all active services (Convex services.getActive equivalent)
   server.get(
@@ -13,10 +17,13 @@ export async function catalogRoutes(app: FastifyInstance) {
       schema: {
         tags: ["Catalog"],
         summary: "Get all active services for public/customer access",
+        querystring: paginationQuery,
       },
     },
-    async () => {
-      return catalogService.getActiveServices();
+    async (request, reply) => {
+      const result = await catalogService.getActiveServices(request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
     }
   );
 
@@ -30,10 +37,13 @@ export async function catalogRoutes(app: FastifyInstance) {
         params: z.object({
           branchId: z.string().uuid(),
         }),
+        querystring: paginationQuery,
       },
     },
-    async (request) => {
-      return catalogService.getBranchServices(request.params.branchId);
+    async (request, reply) => {
+      const result = await catalogService.getBranchServices(request.params.branchId, request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
     }
   );
 }

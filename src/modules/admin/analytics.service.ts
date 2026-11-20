@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, isNull, lte, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, isNotNull, isNull, lte, ne, sql } from "drizzle-orm";
 import { db } from "../../platform/db/index.js";
 import { orders } from "../../platform/db/schema/orders.js";
 import { payments } from "../../platform/db/schema/payments.js";
@@ -25,74 +25,41 @@ export const adminAnalyticsService = {
       conditions.push(lte(orders.createdAt, new Date(query.endDate)));
     }
 
-    const orderRows = await db
+    const [summary] = await db
       .select({
-        id: orders.id,
-        customerId: orders.customerId,
-        status: orders.status,
-        paymentStatus: orders.paymentStatus,
-        finalPricePesewas: orders.finalPricePesewas,
-        createdAt: orders.createdAt,
+        totalOrders: sql<number>`count(*)::int`,
+        totalRevenuePesewas: sql<string>`coalesce(sum(${orders.finalPricePesewas}) filter (where ${orders.paymentStatus} = 'paid'), 0)::text`,
       })
       .from(orders)
-      .where(and(...conditions))
-      .orderBy(desc(orders.createdAt))
-      .limit(5000);
+      .where(and(...conditions));
 
-    const totalOrders = orderRows.length;
-    let totalRevenuePesewas = 0n;
-    const ordersByStatus: Record<string, number> = {};
-    const ordersByDay: Record<string, number> = {};
-    const customerOrderCounts = new Map<string, number>();
+    const [statusRows, dailyRows, topCustomers] = await Promise.all([
+      db.select({ status: orders.status, count: sql<number>`count(*)::int` })
+        .from(orders).where(and(...conditions)).groupBy(orders.status),
+      db.select({
+        day: sql<string>`to_char(${orders.createdAt} at time zone 'UTC', 'YYYY-MM-DD')`,
+        count: sql<number>`count(*)::int`,
+      }).from(orders).where(and(...conditions))
+        .groupBy(sql`to_char(${orders.createdAt} at time zone 'UTC', 'YYYY-MM-DD')`)
+        .orderBy(sql`to_char(${orders.createdAt} at time zone 'UTC', 'YYYY-MM-DD')`),
+      db.select({
+        customerId: orders.customerId,
+        name: customers.name,
+        phoneNumber: customers.phoneNumber,
+        orderCount: sql<number>`count(*)::int`,
+      }).from(orders)
+        .leftJoin(customers, eq(orders.customerId, customers.id))
+        .where(and(...conditions, isNotNull(orders.customerId)))
+        .groupBy(orders.customerId, customers.name, customers.phoneNumber)
+        .orderBy(desc(sql`count(*)`))
+        .limit(10),
+    ]);
 
-    for (const o of orderRows) {
-      if (o.paymentStatus === "paid") {
-        totalRevenuePesewas += o.finalPricePesewas;
-      }
-
-      ordersByStatus[o.status] = (ordersByStatus[o.status] || 0) + 1;
-
-      const dateStr = o.createdAt.toISOString().split("T")[0];
-      ordersByDay[dateStr] = (ordersByDay[dateStr] || 0) + 1;
-
-      if (o.customerId) {
-        customerOrderCounts.set(o.customerId, (customerOrderCounts.get(o.customerId) || 0) + 1);
-      }
-    }
-
-    const totalRevenue = Number(totalRevenuePesewas) / 100;
+    const totalOrders = summary?.totalOrders ?? 0;
+    const totalRevenue = Number(summary?.totalRevenuePesewas ?? 0) / 100;
+    const ordersByStatus = Object.fromEntries(statusRows.map((row) => [row.status, row.count]));
+    const ordersByDay = Object.fromEntries(dailyRows.map((row) => [row.day, row.count]));
     const averageOrderValue = totalOrders > 0 ? Math.round((totalRevenue / totalOrders) * 100) / 100 : 0;
-
-    // Top 10 customers
-    const sortedCustomerEntries = Array.from(customerOrderCounts.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 10);
-
-    const topCustomerIds = sortedCustomerEntries.map((e) => e[0]);
-    let topCustomers: { customerId: string; name: string; phoneNumber: string; orderCount: number }[] = [];
-
-    if (topCustomerIds.length > 0) {
-      const customerDetails = await db
-        .select({
-          id: customers.id,
-          name: customers.name,
-          phoneNumber: customers.phoneNumber,
-        })
-        .from(customers)
-        .where(inArray(customers.id, topCustomerIds));
-
-      const detailMap = new Map(customerDetails.map((c) => [c.id, c]));
-
-      topCustomers = sortedCustomerEntries.map(([customerId, count]) => {
-        const detail = detailMap.get(customerId);
-        return {
-          customerId,
-          name: detail?.name ?? "Unknown",
-          phoneNumber: detail?.phoneNumber ?? "",
-          orderCount: count,
-        };
-      });
-    }
 
     return {
       totalOrders,
@@ -100,7 +67,12 @@ export const adminAnalyticsService = {
       averageOrderValue,
       ordersByStatus,
       ordersByDay,
-      topCustomers,
+      topCustomers: topCustomers.filter((row) => row.customerId !== null).map((row) => ({
+        customerId: row.customerId!,
+        name: row.name ?? "Unknown",
+        phoneNumber: row.phoneNumber ?? "",
+        orderCount: row.orderCount,
+      })),
       dateRange: {
         start: query.startDate,
         end: query.endDate,
@@ -126,47 +98,37 @@ export const adminAnalyticsService = {
       conditions.push(eq(payments.branchId, query.branchId));
     }
 
-    const paymentRows = await db
-      .select({
-        id: payments.id,
-        amountPesewas: payments.amountPesewas,
-        method: payments.method,
-        paidAt: payments.paidAt,
-        createdAt: payments.createdAt,
-      })
-      .from(payments)
-      .where(and(...conditions));
+    const rows = await db.select({
+      day: sql<string>`to_char(coalesce(${payments.paidAt}, ${payments.createdAt}) at time zone 'UTC', 'YYYY-MM-DD')`,
+      method: payments.method,
+      amountPesewas: sql<string>`coalesce(sum(${payments.amountPesewas}), 0)::text`,
+    }).from(payments).where(and(...conditions))
+      .groupBy(
+        sql`to_char(coalesce(${payments.paidAt}, ${payments.createdAt}) at time zone 'UTC', 'YYYY-MM-DD')`,
+        payments.method
+      );
 
-    let totalRevenue = 0;
-    let cashAmount = 0;
-    let mobileMoneyAmount = 0;
-    let cardAmount = 0;
-    const byDay: Record<string, number> = {};
+    const totals = new Map<string, number>();
     const byDayByMethod: Record<string, { cash: number; mobile_money: number; card: number }> = {};
-
-    for (const p of paymentRows) {
-      const amount = Number(p.amountPesewas) / 100;
+    const dayTotals = new Map<string, number>();
+    let totalRevenue = 0;
+    for (const row of rows) {
+      const amount = Number(row.amountPesewas) / 100;
       totalRevenue += amount;
-
-      if (p.method === "cash") cashAmount += amount;
-      else if (p.method === "mobile_money") mobileMoneyAmount += amount;
-      else if (p.method === "card") cardAmount += amount;
-
-      const dateStr = (p.paidAt ?? p.createdAt).toISOString().split("T")[0];
-      byDay[dateStr] = Math.round(((byDay[dateStr] || 0) + amount) * 100) / 100;
-
-      if (!byDayByMethod[dateStr]) {
-        byDayByMethod[dateStr] = { cash: 0, mobile_money: 0, card: 0 };
-      }
-
-      if (p.method === "cash") {
-        byDayByMethod[dateStr].cash = Math.round((byDayByMethod[dateStr].cash + amount) * 100) / 100;
-      } else if (p.method === "mobile_money") {
-        byDayByMethod[dateStr].mobile_money = Math.round((byDayByMethod[dateStr].mobile_money + amount) * 100) / 100;
-      } else if (p.method === "card") {
-        byDayByMethod[dateStr].card = Math.round((byDayByMethod[dateStr].card + amount) * 100) / 100;
+      totals.set(row.method, (totals.get(row.method) ?? 0) + amount);
+      byDayByMethod[row.day] = byDayByMethod[row.day] ?? { cash: 0, mobile_money: 0, card: 0 };
+      dayTotals.set(row.day, (dayTotals.get(row.day) ?? 0) + amount);
+      if (row.method === "cash" || row.method === "mobile_money" || row.method === "card") {
+        byDayByMethod[row.day][row.method] = Math.round(
+          (byDayByMethod[row.day][row.method] + amount) * 100
+        ) / 100;
       }
     }
+
+    const byDay = Object.fromEntries(Array.from(dayTotals, ([day, amount]) => [day, Math.round(amount * 100) / 100]));
+    const cashAmount = totals.get("cash") ?? 0;
+    const mobileMoneyAmount = totals.get("mobile_money") ?? 0;
+    const cardAmount = totals.get("card") ?? 0;
 
     return {
       totalRevenue: Math.round(totalRevenue * 100) / 100,

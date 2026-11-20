@@ -61,8 +61,9 @@ export const adminReconciliationService = {
     });
   },
 
-  async getAllReconciliations() {
-    const rows = await db
+  async getAllReconciliations(query?: { limit?: number; offset?: number }) {
+    const [rows, countRows] = await Promise.all([
+      db
       .select({
         id: cashReconTransactions.id,
         branchId: cashReconTransactions.branchId,
@@ -85,9 +86,12 @@ export const adminReconciliationService = {
       .leftJoin(branches, eq(cashReconTransactions.branchId, branches.id))
       .leftJoin(attendants, eq(cashReconTransactions.attendantId, attendants.id))
       .orderBy(desc(cashReconTransactions.createdAt))
-      .limit(500);
+      .limit(query?.limit ?? 50)
+      .offset(query?.offset ?? 0),
+      db.select({ count: sql<number>`count(*)::int` }).from(cashReconTransactions),
+    ]);
 
-    return rows.map((r) => ({
+    return { items: rows.map((r) => ({
       id: r.id,
       _id: r.id,
       branchId: r.branchId,
@@ -107,11 +111,13 @@ export const adminReconciliationService = {
       notes: r.notes,
       createdAt: r.createdAt.toISOString(),
       completedAt: r.completedAt ? r.completedAt.toISOString() : null,
-    }));
+    })), total: countRows[0]?.count ?? 0 };
   },
 
-  async getAllDeductions() {
-    const rows = await db
+  async getAllDeductions(query?: { limit?: number; offset?: number }) {
+    const conditions = [isNull(cashDeductions.deletedAt)];
+    const [rows, countRows] = await Promise.all([
+      db
       .select({
         id: cashDeductions.id,
         branchId: cashDeductions.branchId,
@@ -126,11 +132,14 @@ export const adminReconciliationService = {
       .from(cashDeductions)
       .leftJoin(branches, eq(cashDeductions.branchId, branches.id))
       .leftJoin(attendants, eq(cashDeductions.attendantId, attendants.id))
-      .where(isNull(cashDeductions.deletedAt))
+      .where(and(...conditions))
       .orderBy(desc(cashDeductions.createdAt))
-      .limit(500);
+      .limit(query?.limit ?? 50)
+      .offset(query?.offset ?? 0),
+      db.select({ count: sql<number>`count(*)::int` }).from(cashDeductions).where(and(...conditions)),
+    ]);
 
-    return rows.map((r) => ({
+    return { items: rows.map((r) => ({
       id: r.id,
       _id: r.id,
       branchId: r.branchId,
@@ -142,10 +151,10 @@ export const adminReconciliationService = {
       reason: r.reason,
       day: r.day,
       createdAt: r.createdAt.toISOString(),
-    }));
+    })), total: countRows[0]?.count ?? 0 };
   },
 
-  async getAllDailyReports(query?: { branchId?: string; startDate?: string; endDate?: string }) {
+  async getAllDailyReports(query?: { branchId?: string; startDate?: string; endDate?: string; limit?: number; offset?: number }) {
     const conditions = [];
 
     if (query?.branchId) {
@@ -160,7 +169,9 @@ export const adminReconciliationService = {
       conditions.push(lte(dailyReports.reportDate, query.endDate));
     }
 
-    const rows = await db
+    const condition = conditions.length > 0 ? and(...conditions) : undefined;
+    const [rows, countRows] = await Promise.all([
+      db
       .select({
         id: dailyReports.id,
         branchId: dailyReports.branchId,
@@ -192,11 +203,14 @@ export const adminReconciliationService = {
       .from(dailyReports)
       .leftJoin(branches, eq(dailyReports.branchId, branches.id))
       .leftJoin(attendants, eq(dailyReports.attendantId, attendants.id))
-      .where(conditions.length > 0 ? and(...conditions) : undefined)
+      .where(condition)
       .orderBy(desc(dailyReports.reportDate))
-      .limit(500);
+      .limit(query?.limit ?? 50)
+      .offset(query?.offset ?? 0),
+      db.select({ count: sql<number>`count(*)::int` }).from(dailyReports).where(condition),
+    ]);
 
-    return rows.map((r) => ({
+    return { items: rows.map((r) => ({
       id: r.id,
       _id: r.id,
       branchId: r.branchId,
@@ -227,7 +241,7 @@ export const adminReconciliationService = {
       submittedAt: r.submittedAt ? r.submittedAt.toISOString() : null,
       notes: r.notes,
       createdAt: r.createdAt.toISOString(),
-    }));
+    })), total: countRows[0]?.count ?? 0 };
   },
 
   async getDailyReportById(id: string) {

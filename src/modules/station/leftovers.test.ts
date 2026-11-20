@@ -111,8 +111,8 @@ describe("public branch lookup (station login screen)", () => {
   it("lists active branches only, sorted by code", async () => {
     const inactive = await mkBranch("I", { isActive: false });
     const deleted = await mkBranch("D", { deletedAt: new Date() });
-    const list = await stationService.listActiveBranches();
-    const codes = list.map((b) => b.code);
+    const list = await stationService.listActiveBranches({ limit: 50, offset: 0 });
+    const codes = list.items.map((b) => b.code);
     expect(codes).toContain(`LA${run}`);
     expect(codes).not.toContain(`LI${run}`);
     expect(codes).not.toContain(`LD${run}`);

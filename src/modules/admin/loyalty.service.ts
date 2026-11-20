@@ -89,7 +89,8 @@ export const adminLoyaltyService = {
     const limit = query?.limit ?? 50;
     const offset = query?.offset ?? 0;
 
-    const rows = await db
+    const [rows, countRows] = await Promise.all([
+      db
       .select({
         id: loyaltyLedger.id,
         customerId: loyaltyLedger.customerId,
@@ -106,9 +107,12 @@ export const adminLoyaltyService = {
       .where(conditions.length > 0 ? and(...conditions) : undefined)
       .orderBy(desc(loyaltyLedger.createdAt))
       .limit(limit)
-      .offset(offset);
+      .offset(offset),
+      db.select({ count: sql<number>`count(*)::int` }).from(loyaltyLedger)
+        .where(conditions.length > 0 ? and(...conditions) : undefined),
+    ]);
 
-    return rows.map((r) => ({
+    return { items: rows.map((r) => ({
       id: r.id,
       _id: r.id,
       customerId: r.customerId,
@@ -119,7 +123,7 @@ export const adminLoyaltyService = {
       balanceAfter: r.balanceAfter,
       reason: r.reason,
       createdAt: r.createdAt.toISOString(),
-    }));
+    })), total: countRows[0]?.count ?? 0 };
   },
 
   async adjustLoyaltyPoints(
@@ -217,7 +221,8 @@ export const adminLoyaltyService = {
     const limit = query?.limit ?? 100;
     const offset = query?.offset ?? 0;
 
-    const rows = await db
+    const [rows, countRows] = await Promise.all([
+      db
       .select({
         id: vouchers.id,
         code: vouchers.code,
@@ -242,9 +247,11 @@ export const adminLoyaltyService = {
       .where(and(...conditions))
       .orderBy(desc(vouchers.createdAt))
       .limit(limit)
-      .offset(offset);
+      .offset(offset),
+      db.select({ count: sql<number>`count(*)::int` }).from(vouchers).where(and(...conditions)),
+    ]);
 
-    return rows.map((r) => ({
+    return { items: rows.map((r) => ({
       id: r.id,
       _id: r.id,
       code: r.code,
@@ -266,7 +273,7 @@ export const adminLoyaltyService = {
       expiresAt: r.expiresAt ? r.expiresAt.toISOString() : null,
       isActive: r.isActive,
       createdAt: r.createdAt.toISOString(),
-    }));
+    })), total: countRows[0]?.count ?? 0 };
   },
 
   async createVoucher(
@@ -534,8 +541,10 @@ export const adminLoyaltyService = {
     });
   },
 
-  async listVoucherBatches() {
-    const batchRows = await db
+  async listVoucherBatches(query?: { limit?: number; offset?: number }) {
+    const conditions = and(sql`${vouchers.batchId} IS NOT NULL`, isNull(vouchers.deletedAt));
+    const [batchRows, countRows] = await Promise.all([
+      db
       .select({
         batchId: vouchers.batchId,
         name: vouchers.name,
@@ -547,12 +556,16 @@ export const adminLoyaltyService = {
         available: sql<number>`sum(case when ${vouchers.isActive} = true and ${vouchers.currentUsageCount} < ${vouchers.maxUsageCount} then 1 else 0 end)::int`,
       })
       .from(vouchers)
-      .where(and(sql`${vouchers.batchId} IS NOT NULL`, isNull(vouchers.deletedAt)))
+      .where(conditions)
       .groupBy(vouchers.batchId, vouchers.name, vouchers.discountValue, vouchers.expiresAt, vouchers.createdAt)
       .orderBy(desc(vouchers.createdAt))
-      .limit(50);
+      .limit(query?.limit ?? 50)
+      .offset(query?.offset ?? 0),
+      db.select({ count: sql<number>`count(distinct ${vouchers.batchId})::int` })
+        .from(vouchers).where(conditions),
+    ]);
 
-    return batchRows.map((b) => ({
+    return { items: batchRows.map((b) => ({
       batchId: b.batchId!,
       name: b.name ?? "Gift Voucher",
       value: Number(b.discountValue) / 100,
@@ -561,7 +574,7 @@ export const adminLoyaltyService = {
       total: b.total,
       used: b.used,
       available: b.available,
-    }));
+    })), total: countRows[0]?.count ?? 0 };
   },
 
   async deactivateVoucherBatch(actor: AuthenticatedUser, batchId: string, meta?: RequestMeta) {

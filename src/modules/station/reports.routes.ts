@@ -37,7 +37,11 @@ export async function stationReportRoutes(app: FastifyInstance) {
   server.get(
     "/",
     { ...base, schema: { tags, summary: "Past reports for this branch, newest first", security, querystring: reportListQuery } },
-    async (request) => reportsService.list(requireStation(request), request.query)
+    async (request, reply) => {
+      const result = await reportsService.list(requireStation(request), request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.put(

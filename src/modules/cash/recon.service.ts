@@ -101,9 +101,17 @@ async function summary(station: StationContext) {
   };
 }
 
-async function todayCashOrders(station: StationContext) {
+async function todayCashOrders(station: StationContext, query: { limit: number; offset: number }) {
   const { start, end } = utcDayBounds();
-  const rows = await db
+  const condition = and(
+    eq(payments.branchId, station.branchId),
+    eq(payments.method, "cash"),
+    eq(payments.status, "paid"),
+    gte(payments.paidAt, start),
+    lt(payments.paidAt, end)
+  );
+  const [rows, countRows] = await Promise.all([
+    db
     .select({
       id: orders.id,
       orderNumber: orders.orderNumber,
@@ -117,17 +125,16 @@ async function todayCashOrders(station: StationContext) {
     .from(payments)
     .innerJoin(orders, eq(orders.id, payments.orderId))
     .innerJoin(customers, eq(customers.id, orders.customerId))
-    .where(
-      and(
-        eq(payments.branchId, station.branchId),
-        eq(payments.method, "cash"),
-        eq(payments.status, "paid"),
-        gte(payments.paidAt, start),
-        lt(payments.paidAt, end)
-      )
-    )
-    .orderBy(desc(payments.paidAt));
-  return rows.map((r) => ({
+    .where(condition)
+    .orderBy(desc(payments.paidAt))
+    .limit(query.limit)
+    .offset(query.offset),
+    db.select({ count: sql<number>`count(*)::int` }).from(payments)
+      .innerJoin(orders, eq(orders.id, payments.orderId))
+      .innerJoin(customers, eq(customers.id, orders.customerId))
+      .where(condition),
+  ]);
+  return { items: rows.map((r) => ({
     id: r.id,
     orderNumber: r.orderNumber,
     status: r.status,
@@ -136,42 +143,62 @@ async function todayCashOrders(station: StationContext) {
     paidAt: r.paidAt!.toISOString(),
     customerName: r.customerName,
     customerPhoneNumber: r.customerPhone,
-  }));
+  })), total: countRows[0]?.count ?? 0 };
 }
 
-async function todayDeductions(station: StationContext) {
+async function todayDeductions(station: StationContext, query: { limit: number; offset: number }) {
   const { day } = utcDayBounds();
-  const rows = await db
+  const condition = and(
+    eq(cashDeductions.branchId, station.branchId),
+    eq(cashDeductions.day, day),
+    isNull(cashDeductions.deletedAt)
+  );
+  const [rows, countRows] = await Promise.all([
+    db
     .select()
     .from(cashDeductions)
-    .where(and(eq(cashDeductions.branchId, station.branchId), eq(cashDeductions.day, day), isNull(cashDeductions.deletedAt)))
-    .orderBy(desc(cashDeductions.createdAt));
-  return rows.map((d) => ({
+    .where(condition)
+    .orderBy(desc(cashDeductions.createdAt))
+    .limit(query.limit)
+    .offset(query.offset),
+    db.select({ count: sql<number>`count(*)::int` }).from(cashDeductions).where(condition),
+  ]);
+  return { items: rows.map((d) => ({
     id: d.id,
     amountPesewas: num(d.amountPesewas),
     reason: d.reason,
     createdAt: d.createdAt.toISOString(),
-  }));
+  })), total: countRows[0]?.count ?? 0 };
 }
 
 /** Same ledger the summary reads, so history and the main page can never disagree. */
-async function history(station: StationContext, limit: number) {
-  const days = await db
+async function history(station: StationContext, query: { limit: number; offset: number }) {
+  const [days, dayCountRows, sends, sendCountRows] = await Promise.all([
+    db
     .select()
     .from(cashLedger)
     .where(eq(cashLedger.branchId, station.branchId))
     .orderBy(desc(cashLedger.day))
-    .limit(limit);
-  const sends = await db
+    .limit(query.limit)
+    .offset(query.offset),
+    db.select({ count: sql<number>`count(*)::int` }).from(cashLedger)
+      .where(eq(cashLedger.branchId, station.branchId)),
+    db
     .select()
     .from(cashReconTransactions)
     .where(eq(cashReconTransactions.branchId, station.branchId))
     .orderBy(desc(cashReconTransactions.createdAt))
-    .limit(limit);
+    .limit(query.limit)
+    .offset(query.offset),
+    db.select({ count: sql<number>`count(*)::int` }).from(cashReconTransactions)
+      .where(eq(cashReconTransactions.branchId, station.branchId)),
+  ]);
   const allocs = sends.length
     ? await db.select().from(cashReconAllocations).where(inArray(cashReconAllocations.transactionId, sends.map((s) => s.id)))
     : [];
   return {
+    daysTotal: dayCountRows[0]?.count ?? 0,
+    sendsTotal: sendCountRows[0]?.count ?? 0,
     days: days.map((d) => ({
       day: d.day,
       collectedPesewas: num(d.collected),

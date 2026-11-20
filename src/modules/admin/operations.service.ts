@@ -32,13 +32,16 @@ async function writeAudit(
 
 export const adminOperationsService = {
   // --- Inventory Management ---
-  async listInventory(branchId?: string) {
+  async listInventory(query?: { branchId?: string; limit?: number; offset?: number }) {
     const conditions = [isNull(inventoryItems.deletedAt)];
-    if (branchId) {
-      conditions.push(eq(inventoryItems.branchId, branchId));
+    if (query?.branchId) {
+      conditions.push(eq(inventoryItems.branchId, query.branchId));
     }
+    const limit = query?.limit ?? 50;
+    const offset = query?.offset ?? 0;
 
-    const rows = await db
+    const [rows, countRows] = await Promise.all([
+      db
       .select({
         id: inventoryItems.id,
         branchId: inventoryItems.branchId,
@@ -61,9 +64,13 @@ export const adminOperationsService = {
       .from(inventoryItems)
       .leftJoin(branches, eq(inventoryItems.branchId, branches.id))
       .where(and(...conditions))
-      .orderBy(asc(inventoryItems.name));
+      .orderBy(asc(inventoryItems.name))
+      .limit(limit)
+      .offset(offset),
+      db.select({ count: sql<number>`count(*)::int` }).from(inventoryItems).where(and(...conditions)),
+    ]);
 
-    return rows.map((r) => ({
+    return { items: rows.map((r) => ({
       id: r.id,
       _id: r.id,
       branchId: r.branchId,
@@ -82,7 +89,7 @@ export const adminOperationsService = {
       expectedArrivalDate: r.expectedArrivalDate ? r.expectedArrivalDate.toISOString() : null,
       lastRestockedAt: r.lastRestockedAt ? r.lastRestockedAt.toISOString() : null,
       createdAt: r.createdAt.toISOString(),
-    }));
+    })), total: countRows[0]?.count ?? 0 };
   },
 
   async createInventoryItem(
@@ -233,16 +240,19 @@ export const adminOperationsService = {
   },
 
   // --- Maintenance Tickets ---
-  async listMaintenanceTickets(branchId?: string, status?: string) {
+  async listMaintenanceTickets(query?: { branchId?: string; status?: string; limit?: number; offset?: number }) {
     const conditions = [isNull(maintenanceTickets.deletedAt)];
-    if (branchId) {
-      conditions.push(eq(maintenanceTickets.branchId, branchId));
+    if (query?.branchId) {
+      conditions.push(eq(maintenanceTickets.branchId, query.branchId));
     }
-    if (status) {
-      conditions.push(eq(maintenanceTickets.status, status as "open" | "fixed"));
+    if (query?.status) {
+      conditions.push(eq(maintenanceTickets.status, query.status as "open" | "fixed"));
     }
+    const limit = query?.limit ?? 50;
+    const offset = query?.offset ?? 0;
 
-    const rows = await db
+    const [rows, countRows] = await Promise.all([
+      db
       .select({
         id: maintenanceTickets.id,
         branchId: maintenanceTickets.branchId,
@@ -265,9 +275,12 @@ export const adminOperationsService = {
       .leftJoin(branches, eq(maintenanceTickets.branchId, branches.id))
       .where(and(...conditions))
       .orderBy(desc(maintenanceTickets.createdAt))
-      .limit(200);
+      .limit(limit)
+      .offset(offset),
+      db.select({ count: sql<number>`count(*)::int` }).from(maintenanceTickets).where(and(...conditions)),
+    ]);
 
-    return rows.map((r) => ({
+    return { items: rows.map((r) => ({
       id: r.id,
       _id: r.id,
       branchId: r.branchId,
@@ -285,7 +298,7 @@ export const adminOperationsService = {
       fixedAt: r.fixedAt ? r.fixedAt.toISOString() : null,
       fixedBy: r.fixedBy,
       createdAt: r.createdAt.toISOString(),
-    }));
+    })), total: countRows[0]?.count ?? 0 };
   },
 
   async markMaintenanceTicketFixed(actor: AuthenticatedUser, ticketId: string, meta?: RequestMeta) {
@@ -354,16 +367,26 @@ export const adminOperationsService = {
   },
 
   // --- Notifications ---
-  async listNotifications(query?: { recipientType?: string; limit?: number }) {
+  async listNotifications(query?: { recipientType?: string; limit?: number; offset?: number }) {
     const limit = query?.limit ?? 50;
+    const offset = query?.offset ?? 0;
+    const conditions = query?.recipientType
+      ? [eq(notifications.recipientType, query.recipientType as "customer" | "attendant" | "admin" | "station" | "all")]
+      : [];
 
-    const rows = await db
+    const [rows, countRows] = await Promise.all([
+      db
       .select()
       .from(notifications)
+      .where(conditions.length ? and(...conditions) : undefined)
       .orderBy(desc(notifications.createdAt))
-      .limit(limit);
+      .limit(limit)
+      .offset(offset),
+      db.select({ count: sql<number>`count(*)::int` }).from(notifications)
+        .where(conditions.length ? and(...conditions) : undefined),
+    ]);
 
-    return rows.map((n) => ({
+    return { items: rows.map((n) => ({
       id: n.id,
       _id: n.id,
       recipientType: n.recipientType,
@@ -378,7 +401,7 @@ export const adminOperationsService = {
       isRead: n.isRead,
       readAt: n.readAt ? n.readAt.toISOString() : null,
       createdAt: n.createdAt.toISOString(),
-    }));
+    })), total: countRows[0]?.count ?? 0 };
   },
 
   async createNotification(
@@ -524,13 +547,16 @@ export const adminOperationsService = {
   },
 
   // --- Headlines ---
-  async listHeadlines(branchId?: string) {
+  async listHeadlines(query?: { branchId?: string; limit?: number; offset?: number }) {
     const conditions = [isNull(headlines.deletedAt)];
-    if (branchId) {
-      conditions.push(or(eq(headlines.branchId, branchId), isNull(headlines.branchId))!);
+    if (query?.branchId) {
+      conditions.push(or(eq(headlines.branchId, query.branchId), isNull(headlines.branchId))!);
     }
+    const limit = query?.limit ?? 50;
+    const offset = query?.offset ?? 0;
 
-    const rows = await db
+    const [rows, countRows] = await Promise.all([
+      db
       .select({
         id: headlines.id,
         branchId: headlines.branchId,
@@ -542,9 +568,13 @@ export const adminOperationsService = {
       })
       .from(headlines)
       .where(and(...conditions))
-      .orderBy(desc(headlines.createdAt));
+      .orderBy(desc(headlines.createdAt))
+      .limit(limit)
+      .offset(offset),
+      db.select({ count: sql<number>`count(*)::int` }).from(headlines).where(and(...conditions)),
+    ]);
 
-    return rows.map((h) => ({
+    return { items: rows.map((h) => ({
       id: h.id,
       _id: h.id,
       branchId: h.branchId,
@@ -553,7 +583,7 @@ export const adminOperationsService = {
       priority: h.priority,
       expiresAt: h.expiresAt ? h.expiresAt.toISOString() : null,
       createdAt: h.createdAt.toISOString(),
-    }));
+    })), total: countRows[0]?.count ?? 0 };
   },
 
   async createHeadline(
@@ -615,15 +645,19 @@ export const adminOperationsService = {
     const limit = query?.limit ?? 100;
     const offset = query?.offset ?? 0;
 
-    const rows = await db
+    const [rows, countRows] = await Promise.all([
+      db
       .select()
       .from(auditLogs)
       .where(conditions.length > 0 ? and(...conditions) : undefined)
       .orderBy(desc(auditLogs.createdAt))
       .limit(limit)
-      .offset(offset);
+      .offset(offset),
+      db.select({ count: sql<number>`count(*)::int` }).from(auditLogs)
+        .where(conditions.length > 0 ? and(...conditions) : undefined),
+    ]);
 
-    return rows.map((a) => ({
+    return { items: rows.map((a) => ({
       id: a.id,
       _id: a.id,
       action: a.action,
@@ -635,6 +669,6 @@ export const adminOperationsService = {
       ipAddress: a.ipAddress,
       userAgent: a.userAgent,
       createdAt: a.createdAt.toISOString(),
-    }));
+    })), total: countRows[0]?.count ?? 0 };
   },
 };

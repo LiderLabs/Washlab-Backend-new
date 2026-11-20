@@ -95,7 +95,11 @@ export async function customerRoutes(app: FastifyInstance) {
         response: { 200: z.array(customerOrderSchema) },
       },
     },
-    async (request) => customerService.getOrders(request.user!.id, request.query)
+    async (request, reply) => {
+      const result = await customerService.getOrders(request.user!.id, request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.get(
@@ -106,10 +110,15 @@ export async function customerRoutes(app: FastifyInstance) {
         tags: ["Customers"],
         summary: "Get customer active in-progress orders (not completed or cancelled)",
         security,
+        querystring: paginationQuerySchema,
         response: { 200: z.array(customerOrderSchema) },
       },
     },
-    async (request) => customerService.getActiveOrders(request.user!.id)
+    async (request, reply) => {
+      const result = await customerService.getActiveOrders(request.user!.id, request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   // Loyalty
@@ -139,7 +148,11 @@ export async function customerRoutes(app: FastifyInstance) {
         response: { 200: z.array(customerLoyaltyTransactionSchema) },
       },
     },
-    async (request) => customerService.getLoyaltyTransactions(request.user!.id, request.query)
+    async (request, reply) => {
+      const result = await customerService.getLoyaltyTransactions(request.user!.id, request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   // Notifications
@@ -155,7 +168,11 @@ export async function customerRoutes(app: FastifyInstance) {
         response: { 200: z.array(customerNotificationSchema) },
       },
     },
-    async (request) => customerService.getNotifications(request.user!.id, request.query)
+    async (request, reply) => {
+      const result = await customerService.getNotifications(request.user!.id, request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.get(
@@ -229,6 +246,10 @@ export async function customerRoutes(app: FastifyInstance) {
         response: { 200: z.array(customerPaymentSchema) },
       },
     },
-    async (request) => customerService.getPayments(request.user!.id, request.query)
+    async (request, reply) => {
+      const result = await customerService.getPayments(request.user!.id, request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 }
