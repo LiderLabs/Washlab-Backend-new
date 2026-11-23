@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, ilike, isNull, notInArray, or, sql, SQL } from "drizzle-orm";
+import { and, arrayContains, asc, desc, eq, ilike, isNull, notInArray, or, sql, SQL } from "drizzle-orm";
 import { db } from "../../platform/db/index.js";
 import { branches } from "../../platform/db/schema/branches.js";
 import { branchMachines, branchServices } from "../../platform/db/schema/catalog.js";
@@ -1240,7 +1240,18 @@ async function listActiveVouchers(station: StationContext, query: { limit: numbe
   const now = new Date();
   const conditions = [
     eq(vouchers.isActive, true),
-    or(isNull(vouchers.branchId), eq(vouchers.branchId, station.branchId)),
+    isNull(vouchers.deletedAt),
+    or(
+      eq(vouchers.branchId, station.branchId),
+      arrayContains(vouchers.applicableBranches, [station.branchId]),
+      and(
+        isNull(vouchers.branchId),
+        or(
+          isNull(vouchers.applicableBranches),
+          sql`cardinality(${vouchers.applicableBranches}) = 0`
+        )
+      )
+    ),
     or(isNull(vouchers.expiresAt), sql`${vouchers.expiresAt} > ${now}`),
     or(isNull(vouchers.validFrom), sql`${vouchers.validFrom} <= ${now}`),
   ];

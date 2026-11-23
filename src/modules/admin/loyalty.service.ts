@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { and, asc, desc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
+import { and, arrayContains, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "../../platform/db/index.js";
 import { customers } from "../../platform/db/schema/customers.js";
 import { loyaltyLedger, vouchers, voucherUsages } from "../../platform/db/schema/loyalty.js";
@@ -206,7 +206,12 @@ export const adminLoyaltyService = {
     const conditions = [isNull(vouchers.deletedAt)];
 
     if (query?.branchId) {
-      conditions.push(eq(vouchers.branchId, query.branchId));
+      conditions.push(
+        or(
+          eq(vouchers.branchId, query.branchId),
+          arrayContains(vouchers.applicableBranches, [query.branchId])
+        )!
+      );
     }
 
     if (query?.isActive !== undefined) {
@@ -228,6 +233,7 @@ export const adminLoyaltyService = {
         code: vouchers.code,
         name: vouchers.name,
         branchId: vouchers.branchId,
+        applicableBranches: vouchers.applicableBranches,
         branchName: branches.name,
         discountType: vouchers.discountType,
         discountValue: vouchers.discountValue,
@@ -257,7 +263,8 @@ export const adminLoyaltyService = {
       code: r.code,
       name: r.name,
       branchId: r.branchId,
-      branchName: r.branchName ?? "All Branches",
+      branchName: r.branchName ?? (r.applicableBranches?.length ? "Multiple Branches" : "All Branches"),
+      applicableBranches: r.applicableBranches,
       discountType: r.discountType,
       discountValue:
         r.discountType === "fixed" ? Number(r.discountValue) / 100 : Number(r.discountValue),

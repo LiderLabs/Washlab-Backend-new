@@ -75,12 +75,70 @@ export const buySubscriptionSchema = z.object({
   purchaseBranchId: uuid.optional(),
 });
 
+export const guestBuySubscriptionSchema = z.object({
+  planId: uuid,
+  customerName: z.string().trim().min(2).max(255),
+  phoneNumber: z.string().trim().min(7).max(20),
+  email: z.string().trim().email().max(255).optional(),
+  purchaseBranchId: uuid.optional(),
+});
+
+export const verifySubscriptionPurchaseSchema = z.object({
+  reference: z.string().trim().min(8).max(128).startsWith("SUB-"),
+});
+
+export const subscriptionPurchaseStatusSchema = z.object({
+  reference: z.string(),
+  paymentStatus: z.enum(["pending", "success", "failed", "abandoned", "ongoing", "unknown"]),
+  subscriptionStatus: z.enum(["pending_payment", "active", "cancelled"]).nullable(),
+  subscriptionId: uuid.nullable(),
+});
+
+export const promoImageSchema = z.object({
+  id: uuid,
+  title: z.string(),
+  imageUrl: z.string(),
+  isActive: z.boolean(),
+  sortOrder: z.number(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export const promoImageCreateSchema = z.object({
+  title: z.string().trim().min(1).max(255),
+  imageUrl: z.string().trim().min(1).max(8_000_000),
+  isActive: z.boolean().optional(),
+  sortOrder: z.number().int().min(-100000).max(100000).optional(),
+});
+
+export const promoImageUpdateSchema = promoImageCreateSchema.partial().refine(
+  (value) => Object.keys(value).length > 0,
+  "At least one field must be provided"
+);
+
+export const promoImageReorderSchema = z.object({
+  ids: z.array(uuid).min(1).max(500),
+});
+
 export const buySubscriptionResponseSchema = z.object({
   subscriptionId: uuid,
   reference: z.string().startsWith("SUB-"),
   amountPesewas: z.union([z.number().int().nonnegative(), z.string().regex(/^\d+$/)]),
   email: z.string().nullable(),
   planName: z.string(),
+});
+
+export const loyaltyRedemptionSchema = z.object({
+  orderId: uuid,
+  pointsToRedeem: z.number().int().min(10).max(1000000).multipleOf(10),
+});
+
+export const loyaltyRedemptionResponseSchema = z.object({
+  orderId: uuid,
+  pointsRedeemed: z.number(),
+  pointsRemaining: z.number(),
+  discountPesewas: z.union([z.number(), z.string()]),
+  amountDuePesewas: z.union([z.number(), z.string()]),
 });
 
 export const stationSubscriptionLookupSchema = z.object({ query: z.string().trim().min(1).max(100) });

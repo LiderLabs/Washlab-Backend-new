@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, or, sql } from "drizzle-orm";
 import { db } from "../../platform/db/index.js";
 import { vouchers, voucherUsages } from "../../platform/db/schema/loyalty.js";
 
@@ -14,7 +14,13 @@ export const voucherService = {
     const [voucher] = await db
       .select()
       .from(vouchers)
-      .where(and(eq(sql`UPPER(${vouchers.code})`, code), eq(vouchers.isActive, true)))
+      .where(
+        and(
+          eq(sql`UPPER(${vouchers.code})`, code),
+          eq(vouchers.isActive, true),
+          sql`${vouchers.deletedAt} IS NULL`
+        )
+      )
       .limit(1);
 
     if (!voucher) {
@@ -46,7 +52,14 @@ export const voucherService = {
       };
     }
 
-    if (voucher.branchId && args.branchId && voucher.branchId !== args.branchId) {
+    const applicableBranches = voucher.applicableBranches ?? [];
+    if (
+      args.branchId &&
+      ((voucher.branchId && voucher.branchId !== args.branchId) ||
+        (!voucher.branchId &&
+          applicableBranches.length > 0 &&
+          !applicableBranches.includes(args.branchId)))
+    ) {
       return {
         valid: false,
         error: "Voucher is not valid for this branch",

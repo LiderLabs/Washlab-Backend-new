@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, integer, timestamp, index, uniqueIndex, boolean, bigint, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, text, integer, timestamp, index, uniqueIndex, boolean, bigint, jsonb } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { customers } from "./customers.js";
 import { orders } from "./orders.js";
@@ -8,11 +8,13 @@ export const loyaltyLedger = pgTable(
   "loyalty_ledger",
   {
     id: uuid("id").defaultRandom().primaryKey(),
+    legacyConvexId: varchar("legacy_convex_id", { length: 64 }).unique(),
     customerId: uuid("customer_id").notNull().references(() => customers.id, { onDelete: "restrict" }),
     orderId: uuid("order_id").references(() => orders.id, { onDelete: "restrict" }),
     pointsDelta: integer("points_delta").notNull(),
     balanceAfter: integer("balance_after").notNull().default(0),
     reason: varchar("reason", { length: 64 }).notNull(), // 'order_completed', 'reward_redemption', 'manual_adjustment'
+    description: text("description"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
@@ -25,9 +27,11 @@ export const vouchers = pgTable(
   "vouchers",
   {
     id: uuid("id").defaultRandom().primaryKey(),
+    legacyConvexId: varchar("legacy_convex_id", { length: 64 }).unique(),
     code: varchar("code", { length: 32 }).notNull().unique(),
     name: varchar("name", { length: 100 }),
     branchId: uuid("branch_id").references(() => branches.id, { onDelete: "set null" }), // null = valid at every branch
+    applicableBranches: uuid("applicable_branches").array(),
     discountType: varchar("discount_type", { length: 16 }).notNull(), // 'percentage', 'fixed', 'free_wash'
     discountValue: bigint("discount_value", { mode: "bigint" }).notNull(), // pesewas for fixed, whole percent for percentage
     minOrderAmountPesewas: bigint("min_order_amount_pesewas", { mode: "bigint" }).notNull().default(sql`0`),
@@ -48,6 +52,7 @@ export const voucherUsages = pgTable(
   "voucher_usages",
   {
     id: uuid("id").defaultRandom().primaryKey(),
+    legacyConvexId: varchar("legacy_convex_id", { length: 64 }).unique(),
     voucherId: uuid("voucher_id").notNull().references(() => vouchers.id, { onDelete: "restrict" }),
     customerId: uuid("customer_id").references(() => customers.id, { onDelete: "restrict" }), // null for guest walk-ins
     orderId: uuid("order_id").notNull().references(() => orders.id, { onDelete: "restrict" }),

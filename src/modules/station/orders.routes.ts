@@ -5,6 +5,7 @@ import { authenticateStation, requireStation, STATION_TOKEN_HEADER } from "../..
 import { stationOrdersService as svc } from "./orders.service.js";
 import { finalizeBody, finalizeResponse } from "./cash.schemas.js";
 import { stationService } from "./service.js";
+import { loyaltyRedemptionService } from "../loyalty/redemption.service.js";
 import {
   customerLoyaltySchema,
   stationPaymentInputSchema,
@@ -47,6 +48,35 @@ const base = { onRequest: [authenticateStation], config: perStationLimit };
 /** Attendant-app order endpoints. Mounted under /v1/station. All require the x-station-token header. */
 export async function stationOrderRoutes(app: FastifyInstance) {
   const server = app.withTypeProvider<ZodTypeProvider>();
+  const redeemLoyaltyBody = z.object({ pointsToRedeem: z.number().int().min(10).multipleOf(10) });
+  const redeemLoyaltyResponse = z.object({
+    orderId: z.string().uuid(),
+    pointsRedeemed: z.number().int(),
+    pointsRemaining: z.number().int(),
+    discountPesewas: z.union([z.number(), z.string()]),
+    amountDuePesewas: z.union([z.number(), z.string()]),
+  });
+
+  server.post(
+    "/orders/:id/loyalty/redeem",
+    {
+      ...base,
+      schema: {
+        tags: ["Station orders"],
+        summary: "Redeem a customer's loyalty points against an unpaid station order",
+        security,
+        params: orderIdParams,
+        body: redeemLoyaltyBody,
+        response: { 200: redeemLoyaltyResponse },
+      },
+    },
+    async (request) =>
+      loyaltyRedemptionService.redeemForOrder(
+        { kind: "station", branchId: requireStation(request).branchId },
+        request.params.id,
+        request.body.pointsToRedeem,
+      )
+  );
 
   server.get(
     "/customers/:id/loyalty",

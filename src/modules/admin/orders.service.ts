@@ -7,6 +7,7 @@ import { loyaltyLedger } from "../../platform/db/schema/loyalty.js";
 import { auditLogs } from "../../platform/db/schema/infrastructure.js";
 import { BadRequestError, NotFoundError } from "../../platform/errors/index.js";
 import type { AuthenticatedUser } from "../../platform/auth/index.js";
+import { csvCell } from "./data.service.js";
 
 type RequestMeta = { ip?: string; userAgent?: string };
 
@@ -445,6 +446,46 @@ export const adminOrdersService = {
       };
     });
     return { items, total: countRows[0]?.count ?? 0 };
+  },
+
+  async exportCustomersCsv(query: {
+    search?: string;
+    status?: "active" | "blocked" | "suspended" | "restricted";
+    isRegistered?: boolean;
+    branchId?: string;
+  }) {
+    const header = [
+      "id", "name", "phoneNumber", "email", "branchId", "branchName", "status",
+      "isRegistered", "isVerified", "loyaltyPoints", "orderCount", "completedOrderCount",
+      "totalSpent", "lastOrderDate", "lastOrderNumber", "createdAt",
+    ];
+    const lines = [header.map(csvCell).join(",")];
+    const limit = 200;
+    for (let offset = 0; ; offset += limit) {
+      const page = await this.listCustomers({ ...query, limit, offset });
+      for (const customer of page.items) {
+        lines.push([
+          customer.id,
+          customer.name,
+          customer.phoneNumber,
+          customer.email,
+          customer.branchId,
+          customer.branchName,
+          customer.status,
+          customer.isRegistered,
+          customer.isVerified,
+          customer.loyaltyPoints,
+          customer.orderCount,
+          customer.completedOrderCount,
+          customer.totalSpent,
+          customer.lastOrderDate,
+          customer.lastOrderNumber,
+          customer.createdAt,
+        ].map(csvCell).join(","));
+      }
+      if (page.items.length < limit) break;
+    }
+    return lines.join("\r\n");
   },
 
   async getCustomerStats(branchId?: string) {

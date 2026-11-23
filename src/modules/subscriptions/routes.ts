@@ -5,10 +5,17 @@ import { authenticate, requireRole } from "../../platform/auth/index.js";
 import { authenticateStation, requireStation } from "../../platform/auth/station.js";
 import { stationService } from "../station/service.js";
 import { subscriptionService } from "./service.js";
+import { subscriptionPromoImagesService } from "./promo-images.service.js";
 import {
   adminSubscriptionPlanSchema,
   buySubscriptionResponseSchema,
   buySubscriptionSchema,
+  guestBuySubscriptionSchema,
+  promoImageCreateSchema,
+  promoImageReorderSchema,
+  promoImageSchema,
+  promoImageUpdateSchema,
+  subscriptionPurchaseStatusSchema,
   createSubscriptionPlanSchema,
   customerSubscriptionSchema,
   paginationQuerySchema,
@@ -18,6 +25,7 @@ import {
   sendSubscriptionOtpSchema,
   subscriptionPlanSchema,
   subscriptionPlansQuerySchema,
+  verifySubscriptionPurchaseSchema,
   stationSubscriptionLookupSchema,
   subscriptionSuccessSchema,
   updateSubscriptionPlanSchema,
@@ -55,6 +63,44 @@ export async function customerSubscriptionRoutes(app: FastifyInstance) {
       },
     },
     async (request) => subscriptionService.listPlans({ activeOnly: true, branchId: request.query.branchId })
+  );
+
+  server.get(
+    "/subscriptions/promo-images",
+    {
+      schema: {
+        tags: ["Customer Subscriptions"],
+        summary: "List active subscription promotion images",
+        response: { 200: z.array(promoImageSchema) },
+      },
+    },
+    async () => (await subscriptionPromoImagesService.listActive()).map(promoImageDto)
+  );
+
+  server.post(
+    "/subscriptions/guest-buy",
+    {
+      schema: {
+        tags: ["Customer Subscriptions"],
+        summary: "Create a pending subscription purchase for a guest",
+        body: guestBuySubscriptionSchema,
+        response: { 200: buySubscriptionResponseSchema },
+      },
+    },
+    async (request) => subscriptionService.guestBuy(request.body)
+  );
+
+  server.post(
+    "/subscriptions/verify",
+    {
+      schema: {
+        tags: ["Customer Subscriptions"],
+        summary: "Verify a Paystack subscription purchase and activate it if paid",
+        body: verifySubscriptionPurchaseSchema,
+        response: { 200: subscriptionPurchaseStatusSchema },
+      },
+    },
+    async (request) => subscriptionService.verifyPurchase(request.body.reference)
   );
 
   server.post(
@@ -161,6 +207,81 @@ export async function adminSubscriptionRoutes(app: FastifyInstance) {
   const server = app.withTypeProvider<ZodTypeProvider>();
 
   server.get(
+    "/subscriptions/promo-images",
+    {
+      ...adminBase,
+      schema: {
+        tags: ["Admin Subscriptions"],
+        summary: "List all subscription promotion images",
+        security: bearerSecurity,
+        response: { 200: z.array(promoImageSchema) },
+      },
+    },
+    async () => (await subscriptionPromoImagesService.listAll()).map(promoImageDto)
+  );
+
+  server.post(
+    "/subscriptions/promo-images",
+    {
+      ...adminBase,
+      schema: {
+        tags: ["Admin Subscriptions"],
+        summary: "Create a subscription promotion image",
+        security: bearerSecurity,
+        body: promoImageCreateSchema,
+        response: { 201: promoImageSchema },
+      },
+    },
+    async (request, reply) => reply.status(201).send(promoImageDto(await subscriptionPromoImagesService.create(request.body)))
+  );
+
+  server.put(
+    "/subscriptions/promo-images/order",
+    {
+      ...adminBase,
+      schema: {
+        tags: ["Admin Subscriptions"],
+        summary: "Reorder subscription promotion images",
+        security: bearerSecurity,
+        body: promoImageReorderSchema,
+        response: { 200: z.object({ success: z.boolean() }) },
+      },
+    },
+    async (request) => subscriptionPromoImagesService.reorder(request.body.ids)
+  );
+
+  server.patch(
+    "/subscriptions/promo-images/:id",
+    {
+      ...adminBase,
+      schema: {
+        tags: ["Admin Subscriptions"],
+        summary: "Update a subscription promotion image",
+        security: bearerSecurity,
+        params: idParam,
+        body: promoImageUpdateSchema,
+        response: { 200: promoImageSchema },
+      },
+    },
+    async (request) => promoImageDto(await subscriptionPromoImagesService.update(request.params.id, request.body))
+  );
+
+  server.delete(
+    "/subscriptions/promo-images/:id",
+    {
+      ...adminBase,
+      schema: {
+        tags: ["Admin Subscriptions"],
+        summary: "Delete a subscription promotion image",
+        security: bearerSecurity,
+        params: idParam,
+        response: { 200: subscriptionSuccessSchema },
+      },
+    },
+    async (request) => subscriptionPromoImagesService.remove(request.params.id)
+  );
+
+  server.get(
     "/subscriptions/plans",
     {
       ...adminBase,
@@ -241,4 +362,20 @@ export async function adminSubscriptionRoutes(app: FastifyInstance) {
     async (request) =>
       subscriptionService.deletePlan(request.user!.staffId ?? "", request.params.id, meta(request))
   );
+}
+
+function promoImageDto(image: {
+  id: string;
+  title: string;
+  imageUrl: string;
+  isActive: boolean;
+  sortOrder: number;
+  createdAt: Date;
+  updatedAt: Date;
+}) {
+  return {
+    ...image,
+    createdAt: image.createdAt.toISOString(),
+    updatedAt: image.updatedAt.toISOString(),
+  };
 }

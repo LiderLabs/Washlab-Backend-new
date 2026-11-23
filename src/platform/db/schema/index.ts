@@ -12,3 +12,4 @@ export * from "./loyalty.js";
 export * from "./infrastructure.js";
 export * from "./subscriptions.js";
 export * from "./subscription-usages.js";
+export * from "./subscription-promo-images.js";

@@ -14,6 +14,7 @@ export const cashLedger = pgTable(
   "cash_ledger",
   {
     id: uuid("id").defaultRandom().primaryKey(),
+    legacyConvexId: varchar("legacy_convex_id", { length: 64 }).unique(),
     branchId: uuid("branch_id").notNull().references(() => branches.id, { onDelete: "restrict" }),
     day: date("day", { mode: "string" }).notNull(),
     collected: bigint("collected", { mode: "bigint" }).notNull().default(sql`0`),
@@ -101,6 +102,7 @@ export const cashCredits = pgTable(
   "cash_credits",
   {
     id: uuid("id").defaultRandom().primaryKey(),
+    legacyConvexId: varchar("legacy_convex_id", { length: 64 }).unique(),
     branchId: uuid("branch_id").notNull().references(() => branches.id, { onDelete: "restrict" }),
     day: date("day", { mode: "string" }).notNull(),
     amountPesewas: bigint("amount_pesewas", { mode: "bigint" }).notNull(),

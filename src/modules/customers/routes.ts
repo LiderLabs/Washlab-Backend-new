@@ -3,6 +3,7 @@ import { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { authenticate } from "../../platform/auth/index.js";
 import { customerService } from "./service.js";
+import { loyaltyRedemptionService } from "../loyalty/redemption.service.js";
 import {
   checkRoleResponseSchema,
   customerLoyaltyBalanceSchema,
@@ -19,6 +20,14 @@ import {
 const security = [{ bearerAuth: [] }];
 const base = { onRequest: [authenticate] };
 const idParam = z.object({ id: z.string().uuid() });
+const redeemLoyaltyBody = z.object({ pointsToRedeem: z.number().int().min(10).multipleOf(10) });
+const redeemLoyaltyResponse = z.object({
+  orderId: z.string().uuid(),
+  pointsRedeemed: z.number().int(),
+  pointsRemaining: z.number().int(),
+  discountPesewas: z.union([z.number(), z.string()]),
+  amountDuePesewas: z.union([z.number(), z.string()]),
+});
 
 export async function customerRoutes(app: FastifyInstance) {
   const server = app.withTypeProvider<ZodTypeProvider>();
@@ -36,6 +45,27 @@ export async function customerRoutes(app: FastifyInstance) {
       },
     },
     async (request) => customerService.getProfile(request.user!.id)
+  );
+
+  server.post(
+    "/orders/:id/loyalty/redeem",
+    {
+      ...base,
+      schema: {
+        tags: ["Customer Loyalty"],
+        summary: "Redeem loyalty points against one of the customer's unpaid orders",
+        security,
+        params: idParam,
+        body: redeemLoyaltyBody,
+        response: { 200: redeemLoyaltyResponse },
+      },
+    },
+    async (request) =>
+      loyaltyRedemptionService.redeemForOrder(
+        { kind: "customer", clerkUserId: request.user!.id },
+        request.params.id,
+        request.body.pointsToRedeem,
+      )
   );
 
   server.post(

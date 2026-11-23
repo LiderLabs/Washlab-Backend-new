@@ -1,4 +1,4 @@
-import { and, desc, eq, ilike, isNull, notInArray, or, sql, SQL } from "drizzle-orm";
+import { and, arrayContains, desc, eq, ilike, isNull, notInArray, or, sql, SQL } from "drizzle-orm";
 import { db } from "../../platform/db/index.js";
 import { branches } from "../../platform/db/schema/branches.js";
 import { branchServices } from "../../platform/db/schema/catalog.js";
@@ -141,7 +141,18 @@ export const orderService = {
           and(
             eq(vouchers.code, input.voucherCode.trim().toUpperCase()),
             eq(vouchers.isActive, true),
-            or(isNull(vouchers.branchId), eq(vouchers.branchId, branch.id))
+            isNull(vouchers.deletedAt),
+            or(
+              eq(vouchers.branchId, branch.id),
+              arrayContains(vouchers.applicableBranches, [branch.id]),
+              and(
+                isNull(vouchers.branchId),
+                or(
+                  isNull(vouchers.applicableBranches),
+                  sql`cardinality(${vouchers.applicableBranches}) = 0`
+                )
+              )
+            )
           )
         )
         .limit(1);

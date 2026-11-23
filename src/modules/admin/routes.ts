@@ -2,6 +2,7 @@ import { FastifyInstance, FastifyRequest } from "fastify";
 import { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { authenticate, requirePermission, requireRole } from "../../platform/auth/index.js";
+import { BadRequestError } from "../../platform/errors/index.js";
 import { adminStaffService } from "./service.js";
 import { adminBranchesService } from "./branches.service.js";
 import { adminOrdersService } from "./orders.service.js";
@@ -9,6 +10,7 @@ import { adminAnalyticsService } from "./analytics.service.js";
 import { adminReconciliationService } from "./reconciliation.service.js";
 import { adminLoyaltyService } from "./loyalty.service.js";
 import { adminOperationsService } from "./operations.service.js";
+import { adminDataService } from "./data.service.js";
 import {
   adminAdjustPointsSchema,
   adminAnalyticsOverviewDtoSchema,
@@ -355,6 +357,31 @@ export async function adminRoutes(app: FastifyInstance) {
   );
 
   server.get(
+    "/attendance/logs",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Attendance"],
+        summary: "Filter and paginate attendance logs",
+        security,
+        querystring: z.object({
+          limit: z.coerce.number().int().min(1).max(200).default(50),
+          offset: z.coerce.number().int().min(0).default(0),
+          branchId: z.string().uuid().optional(),
+          attendantId: z.string().uuid().optional(),
+          startDate: z.coerce.number().int().optional(),
+          endDate: z.coerce.number().int().optional(),
+        }),
+      },
+    },
+    async (request, reply) => {
+      const result = await adminDataService.listAttendanceLogs(request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
+  );
+
+  server.get(
     "/branches/by-code/:code",
     {
       ...baseAdmin,
@@ -590,6 +617,56 @@ export async function adminRoutes(app: FastifyInstance) {
   );
 
   server.post(
+    "/images/upload",
+    {
+      ...baseAdmin,
+      bodyLimit: 6 * 1024 * 1024,
+      schema: {
+        tags: ["Admin Media"],
+        summary: "Validate and return a base64 image data URL",
+        security,
+        body: z.object({
+          fileName: z.string().trim().min(1).max(255),
+          dataUrl: z.string().min(1).max(6 * 1024 * 1024),
+        }),
+        response: {
+          200: z.object({
+            fileName: z.string(),
+            imageUrl: z.string(),
+            sizeBytes: z.number().int(),
+          }),
+        },
+      },
+    },
+    async (request) => {
+      const match = /^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/]+={0,2})$/.exec(request.body.dataUrl);
+      if (!match) {
+        throw new BadRequestError("Image must be a valid PNG, JPEG, WebP, or GIF base64 data URL", "INVALID_IMAGE");
+      }
+      const bytes = Buffer.from(match[2], "base64");
+      if (bytes.length === 0 || bytes.length > 4 * 1024 * 1024 || bytes.toString("base64") !== match[2]) {
+        throw new BadRequestError("Image payload is invalid or exceeds the 4 MB limit", "INVALID_IMAGE");
+      }
+      const signatureMatches =
+        (match[1] === "image/png" && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) ||
+        (match[1] === "image/jpeg" && bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) ||
+        (match[1] === "image/gif" && ["GIF87a", "GIF89a"].includes(bytes.subarray(0, 6).toString("ascii"))) ||
+        (match[1] === "image/webp" &&
+          bytes.length >= 12 &&
+          bytes.subarray(0, 4).toString("ascii") === "RIFF" &&
+          bytes.subarray(8, 12).toString("ascii") === "WEBP");
+      if (!signatureMatches) {
+        throw new BadRequestError("Image content does not match the declared format", "INVALID_IMAGE");
+      }
+      return {
+        fileName: request.body.fileName,
+        imageUrl: `data:${match[1]};base64,${match[2]}`,
+        sizeBytes: bytes.length,
+      };
+    }
+  );
+
+  server.post(
     "/services",
     {
       ...baseAdmin,
@@ -812,6 +889,25 @@ export async function adminRoutes(app: FastifyInstance) {
   );
 
   server.get(
+    "/customers/export.csv",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Customers"],
+        summary: "Export filtered customers as CSV",
+        security,
+        querystring: adminListCustomersQuerySchema,
+      },
+    },
+    async (request, reply) => {
+      const csv = await adminOrdersService.exportCustomersCsv(request.query);
+      reply.type("text/csv; charset=utf-8");
+      reply.header("Content-Disposition", 'attachment; filename="customers.csv"');
+      return csv;
+    }
+  );
+
+  server.get(
     "/customers/stats",
     {
       ...baseAdmin,
@@ -893,6 +989,32 @@ export async function adminRoutes(app: FastifyInstance) {
       },
     },
     async (request) => adminAnalyticsService.getPaymentStats(request.query)
+  );
+
+  server.get(
+    "/payments/transactions",
+    {
+      ...baseAdmin,
+      schema: {
+        tags: ["Admin Payments"],
+        summary: "Filter and paginate payment transaction history",
+        security,
+        querystring: z.object({
+          limit: z.coerce.number().int().min(1).max(200).default(50),
+          offset: z.coerce.number().int().min(0).default(0),
+          branchId: z.string().uuid().optional(),
+          status: z.enum(["pending", "paid", "failed", "refunded"]).optional(),
+          method: z.enum(["cash", "mobile_money", "card", "voucher", "subscription"]).optional(),
+          startDate: z.coerce.number().int().optional(),
+          endDate: z.coerce.number().int().optional(),
+        }),
+      },
+    },
+    async (request, reply) => {
+      const result = await adminDataService.listTransactions(request.query);
+      reply.header("X-Total-Count", result.total);
+      return result.items;
+    }
   );
 
   server.get(

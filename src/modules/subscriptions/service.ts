@@ -16,6 +16,8 @@ import { hashSecret, verifySecret } from "../../platform/crypto/index.js";
 import { writeAudit } from "../../platform/audit/index.js";
 import { broadcastRealtimeEvent } from "../../platform/realtime/index.js";
 import { normalizePhone } from "../customers/schemas.js";
+import { paystack } from "../../platform/paystack/index.js";
+import { settleSubscriptionPayment } from "../payments/settle.js";
 import type { StationContext } from "../../platform/auth/station.js";
 import type {
   CreateSubscriptionPlanInput,
@@ -371,6 +373,93 @@ export const subscriptionService = {
       amountPesewas: moneyValue(plan.pricePesewas),
       email: customer.email,
       planName: plan.name,
+    };
+  },
+
+  async guestBuy(input: {
+    planId: string;
+    customerName: string;
+    phoneNumber: string;
+    email?: string;
+    purchaseBranchId?: string;
+  }) {
+    const [plan] = await db
+      .select()
+      .from(subscriptionPlans)
+      .where(and(eq(subscriptionPlans.id, input.planId), eq(subscriptionPlans.isActive, true), isNull(subscriptionPlans.deletedAt)))
+      .limit(1);
+    if (!plan) throw new NotFoundError("Plan is not available", "SUBSCRIPTION_PLAN_NOT_FOUND");
+    if (!availableAtBranch(plan.applicableBranches, input.purchaseBranchId)) {
+      throw new BadRequestError("This plan is not available at the selected branch", "SUBSCRIPTION_BRANCH_UNAVAILABLE");
+    }
+
+    const now = new Date();
+    const reference = randomReference();
+    const [sub] = await db
+      .insert(customerSubscriptions)
+      .values({
+        customerId: null,
+        phoneNumber: normalizePhone(input.phoneNumber),
+        customerName: input.customerName.trim(),
+        planId: plan.id,
+        planName: plan.name,
+        planPricePesewas: plan.pricePesewas,
+        loadsTotal: plan.loadsIncluded,
+        loadsUsed: 0,
+        validityDays: plan.validityDays,
+        applicableServiceTypes: plan.applicableServiceTypes,
+        applicableBranches: plan.applicableBranches,
+        purchaseBranchId: input.purchaseBranchId,
+        code: `WL-${randomCode(6)}`,
+        status: "pending_payment",
+        source: "online",
+        paymentReference: reference,
+        email: input.email ?? null,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .returning();
+    return {
+      subscriptionId: sub!.id,
+      reference,
+      amountPesewas: moneyValue(plan.pricePesewas),
+      email: input.email ?? null,
+      planName: plan.name,
+    };
+  },
+
+  async verifyPurchase(reference: string) {
+    const [sub] = await db
+      .select({
+        id: customerSubscriptions.id,
+        status: customerSubscriptions.status,
+      })
+      .from(customerSubscriptions)
+      .where(and(eq(customerSubscriptions.paymentReference, reference), isNull(customerSubscriptions.deletedAt)))
+      .limit(1);
+    if (!sub) throw new NotFoundError("Subscription purchase not found", "SUBSCRIPTION_NOT_FOUND");
+
+    const gateway = await paystack().verify(reference);
+    await settleSubscriptionPayment(reference, gateway, "finalize");
+    const [updated] = await db
+      .select({
+        id: customerSubscriptions.id,
+        status: customerSubscriptions.status,
+      })
+      .from(customerSubscriptions)
+      .where(eq(customerSubscriptions.id, sub.id))
+      .limit(1);
+    const gatewayStatus: "pending" | "failed" | "unknown" | "success" | "abandoned" | "ongoing" =
+      ["success", "failed", "abandoned", "ongoing"].includes(gateway.status)
+      ? gateway.status as "success" | "failed" | "abandoned" | "ongoing"
+      : gateway.status === "pending"
+        ? "pending"
+        : "unknown";
+    return {
+      reference,
+      paymentStatus: gatewayStatus,
+      subscriptionStatus: updated?.status ?? sub.status,
+      subscriptionId: sub.id,
     };
   },
 

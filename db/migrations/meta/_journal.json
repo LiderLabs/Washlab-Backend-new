@@ -120,6 +120,20 @@
       "when": 1795178890978,
       "tag": "0016_furry_mother_askani",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1795182035800,
+      "tag": "0017_soft_forge",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1795428603024,
+      "tag": "0018_lazy_mac_gargan",
+      "breakpoints": true
     }
   ]
 }

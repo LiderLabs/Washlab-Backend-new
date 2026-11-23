@@ -24,7 +24,7 @@ function formatPesewas(amount: bigint) {
 export async function settleSubscriptionPayment(
   reference: string,
   gateway: PaystackVerification,
-  source: "webhook"
+  source: "webhook" | "finalize"
 ) {
   if (gateway.status !== "success") return { result: "not_successful" as const };
 

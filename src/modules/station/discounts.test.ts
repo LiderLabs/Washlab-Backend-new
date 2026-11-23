@@ -7,6 +7,7 @@ import { customers } from "../../platform/db/schema/customers.js";
 import { loyaltyLedger, voucherUsages, vouchers } from "../../platform/db/schema/loyalty.js";
 import { setPaystackClient } from "../../platform/paystack/index.js";
 import { buildApp } from "../../app.js";
+import { voucherService } from "../vouchers/service.js";
 import { stationService } from "./service.js";
 import { destroyBranch, FakePaystack, makeBranch } from "../cash/test-helpers.js";
 
@@ -80,6 +81,24 @@ describe("vouchers", () => {
     const free = await voucher({ discountType: "free_wash", discountValue: 0n });
     const r2 = await pay(o2.id, { voucherCode: free.code });
     expect(r2.json().amountPesewas).toBe("0");
+  });
+
+  it("preserves multi-branch scope and rejects deleted vouchers", async () => {
+    const other = await makeBranch("DY");
+    const outside = await makeBranch("DZ");
+    const scoped = await voucher({
+      branchId: null,
+      applicableBranches: [f.branchId, other.branchId],
+    });
+    expect((await voucherService.validateVoucher({ code: scoped.code, branchId: other.branchId })).valid).toBe(true);
+    expect((await voucherService.validateVoucher({ code: scoped.code, branchId: outside.branchId })).valid).toBe(false);
+
+    const deleted = await voucher({ deletedAt: new Date(), isActive: true });
+    expect((await voucherService.validateVoucher({ code: deleted.code, branchId: f.branchId })).valid).toBe(false);
+    await db.delete(vouchers).where(eq(vouchers.id, scoped.id));
+    await db.delete(vouchers).where(eq(vouchers.id, deleted.id));
+    await destroyBranch(other);
+    await destroyBranch(outside);
   });
 
   it("never discounts below zero", async () => {
