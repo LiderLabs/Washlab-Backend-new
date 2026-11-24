@@ -8,6 +8,7 @@ import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import * as schema from "../src/platform/db/schema/index.js";
+import { normalizePhone } from "../src/modules/customers/schemas.js";
 import { branches } from "../src/platform/db/schema/branches.js";
 import { branchMachines, branchServices, services } from "../src/platform/db/schema/catalog.js";
 import { customers } from "../src/platform/db/schema/customers.js";
@@ -26,12 +27,14 @@ type IdMap = Map<string, string>;
 const BATCH_SIZE = 500;
 const args = process.argv.slice(2);
 const dryRun = args.includes("--dry-run");
+const force = args.includes("--force");
 const inputArgIndex = args.findIndex((arg) => arg === "--input-dir");
 const inputDirArg = inputArgIndex >= 0 ? args[inputArgIndex + 1] : undefined;
 const inputDir = resolve(inputDirArg ?? "convex-export");
 
 if (args.includes("--help")) {
-  console.log("Usage: npm exec tsx -- scripts/import-convex.ts [--input-dir <directory>] [--dry-run]");
+  console.log("Usage: npm exec tsx -- scripts/import-convex.ts [--input-dir <directory>] [--dry-run] [--force]");
+  console.log("--force: run even though live (non-imported) orders already exist. Re-running after go-live can overwrite loyalty balances.");
   console.log("Input: one Convex table JSONL file per source table, e.g. branches.jsonl.");
   process.exit(0);
 }
@@ -200,6 +203,26 @@ async function loadIdMap(tableName: string): Promise<IdMap> {
   return new Map(rows.map((row) => [String(row.legacy_convex_id), String(row.id)]));
 }
 
+// The app stores and looks customers up by normalizePhone() ("+233..."). Convex stored whatever was typed ("024...",
+// "233...", "+233..."), so import the normalized form or imported customers would never be found by phone again
+// (duplicates created, loyalty and history orphaned). Two live customers must not normalize to the same number
+// (unique index), so that is reported up front, which also makes --dry-run catch it.
+const seenPhones = new Map<string, string>();
+function customerPhone(doc: ConvexDoc, legacyConvexId: string): string {
+  const phone = normalizePhone(requiredString(doc, "phoneNumber"));
+  if (!/^\+233\d{9}$/.test(phone)) {
+    throw new Error(`Phone number '${String(doc.phoneNumber)}' does not normalize to a valid Ghana number (${phone})`);
+  }
+  if (!booleanValue(doc, "isDeleted")) {
+    const other = seenPhones.get(phone);
+    if (other && other !== legacyConvexId) {
+      throw new Error(`Duplicate phone ${phone}: also used by ${other}. Merge or delete one in the export first`);
+    }
+    seenPhones.set(phone, legacyConvexId);
+  }
+  return phone;
+}
+
 async function loadPhoneMap(): Promise<Map<string, string>> {
   const rows = await db.select({ id: customers.id, phoneNumber: customers.phoneNumber }).from(customers);
   return new Map(rows.map((row) => [row.phoneNumber, row.id]));
@@ -287,10 +310,11 @@ async function ensureGuestCustomers(
   for await (const { doc, line } of readJsonl(orderFile)) {
     const customerRef = optionalString(doc, "customerId");
     if (customerRef && customerIds.has(customerRef)) continue;
-    const phone = optionalString(doc, "customerPhoneNumber");
-    if (!phone) {
+    const rawPhone = optionalString(doc, "customerPhoneNumber");
+    if (!rawPhone) {
       throw new Error(`${orderFile}:${line}: order without a customer mapping has no customerPhoneNumber`);
     }
+    const phone = normalizePhone(rawPhone);
     if (phoneIds.has(phone)) continue;
     const legacyConvexId = `legacy-guest:${phone}`;
     if (customerIds.has(legacyConvexId)) continue;
@@ -321,6 +345,15 @@ async function ensureGuestCustomers(
 }
 
 async function main(): Promise<void> {
+  if (!dryRun && !force) {
+    const [live] = await client`SELECT count(*)::int AS n FROM orders WHERE legacy_convex_id IS NULL`;
+    if (Number(live?.n) > 0) {
+      throw new Error(
+        `${live!.n} live orders (not imported from Convex) already exist. Re-running the import now could overwrite ` +
+          `loyalty balances with the old snapshot. Pass --force only if you are sure.`
+      );
+    }
+  }
   if (!dryRun) {
     console.log(`Importing Convex JSONL from ${inputDir} in batches of ${BATCH_SIZE}`);
   } else {
@@ -566,7 +599,7 @@ async function main(): Promise<void> {
         legacyConvexId,
         clerkUserId: optionalString(doc, "clerkUserId"),
         name: requiredString(doc, "name"),
-        phoneNumber: requiredString(doc, "phoneNumber"),
+        phoneNumber: customerPhone(doc, legacyConvexId),
         email: optionalString(doc, "email"),
         branchId: optionalMapId(ids.branches, value(doc, "preferredBranchId") ?? value(doc, "branchId"), "customer branch"),
         loyaltyPoints: 0,
@@ -634,7 +667,7 @@ async function main(): Promise<void> {
       const legacyConvexId = sourceId(doc);
       const createdAt = timestampValue(doc, "createdAt", new Date()) ?? new Date();
       const customerRef = value(doc, "customerId");
-      const phone = requiredString(doc, "phoneNumber");
+      const phone = normalizePhone(requiredString(doc, "phoneNumber"));
       const customerId =
         typeof customerRef === "string" && ids.customers.has(customerRef)
           ? ids.customers.get(customerRef)!
@@ -689,7 +722,7 @@ async function main(): Promise<void> {
       const customerRef = optionalString(doc, "customerId");
       const customerId =
         (customerRef && ids.customers.get(customerRef)) ||
-        phoneIds.get(requiredString(doc, "customerPhoneNumber"));
+        phoneIds.get(normalizePhone(requiredString(doc, "customerPhoneNumber")));
       if (!customerId) throw new Error("Could not resolve a customer for this order");
       const rawStatus = optionalString(doc, "status") ?? "pending_dropoff";
       const statusMap: Record<string, string> = {
