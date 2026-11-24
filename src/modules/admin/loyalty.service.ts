@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { and, arrayContains, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { and, arrayContains, asc, desc, eq, gte, ilike, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "../../platform/db/index.js";
 import { customers } from "../../platform/db/schema/customers.js";
 import { loyaltyLedger, vouchers, voucherUsages } from "../../platform/db/schema/loyalty.js";
@@ -220,7 +220,8 @@ export const adminLoyaltyService = {
 
     if (query?.search) {
       const s = `%${query.search.trim()}%`;
-      conditions.push(sql`${vouchers.code} ILIKE ${s} OR ${vouchers.name} ILIKE ${s}`);
+      // or() adds the parentheses; a bare "a OR b" inside and(...) would let deleted vouchers match on name.
+      conditions.push(or(ilike(vouchers.code, s), ilike(vouchers.name, s))!);
     }
 
     const limit = query?.limit ?? 100;
