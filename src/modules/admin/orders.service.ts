@@ -403,7 +403,8 @@ export const adminOrdersService = {
         orderCount: sql<number>`count(*)::int`,
         completedCount: sql<number>`count(*) filter (where ${orders.status} = 'completed')::int`,
         totalSpentPesewas: sql<string>`coalesce(sum(${orders.finalPricePesewas}) filter (where ${orders.paymentStatus} = 'paid'), 0)::text`,
-        lastOrderDate: sql<Date | null>`max(${orders.createdAt})`,
+        // mapWith: a raw max() comes back from the driver as a string, not a Date.
+        lastOrderDate: sql<Date | null>`max(${orders.createdAt})`.mapWith(orders.createdAt),
         lastOrderNumber: sql<string | null>`(array_agg(${orders.orderNumber} order by ${orders.createdAt} desc))[1]`,
         branchesSeen: sql<string | null>`string_agg(distinct ${branches.name}, ', ' order by ${branches.name})`,
       })

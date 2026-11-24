@@ -71,6 +71,19 @@ afterAll(async () => {
   await app.close();
 });
 
+describe("customer list with order history", () => {
+  it("lists a customer who has orders (aggregates come back as real dates and numbers)", async () => {
+    const o = await newOrder();
+    const res = await call("GET", "/customers?limit=200");
+    expect(res.statusCode).toBe(200);
+    const row = (res.json() as any[]).find((c) => c.id === f.customerId);
+    expect(row.orderCount).toBeGreaterThanOrEqual(1);
+    expect(row.lastOrderNumber).toBe(o.orderNumber);
+    expect(new Date(row.lastOrderDate).toString()).not.toBe("Invalid Date");
+    expect(Number(res.headers["x-total-count"])).toBeGreaterThanOrEqual(1);
+  });
+});
+
 describe("access control", () => {
   const sample: [string, string][] = [
     ["GET", "/me"],
