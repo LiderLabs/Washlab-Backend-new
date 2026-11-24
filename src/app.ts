@@ -50,7 +50,9 @@ export async function buildApp() {
     const asNumber = Number(value);
     return Number.isSafeInteger(asNumber) ? asNumber : value.toString();
   };
-  app.setReplySerializer((payload) => JSON.stringify(payload, bigIntJsonReplacer));
+  // Do NOT use app.setReplySerializer here: it replaces the Zod response serializer on every route, so response
+  // schemas stop stripping unknown fields (anything a service returns would reach the client). The preSerialization
+  // hook below converts bigint (and Dates) first, then the route's own Zod serializer still runs.
   app.addHook("preSerialization", async (_request, _reply, payload) =>
     JSON.parse(JSON.stringify(payload, bigIntJsonReplacer))
   );

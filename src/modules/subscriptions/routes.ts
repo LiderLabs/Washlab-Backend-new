@@ -80,6 +80,8 @@ export async function customerSubscriptionRoutes(app: FastifyInstance) {
   server.post(
     "/subscriptions/guest-buy",
     {
+      // Public and creates a row per call, so keep it well under the global limit.
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
       schema: {
         tags: ["Customer Subscriptions"],
         summary: "Create a pending subscription purchase for a guest",
@@ -93,6 +95,8 @@ export async function customerSubscriptionRoutes(app: FastifyInstance) {
   server.post(
     "/subscriptions/verify",
     {
+      // Public; each call may hit Paystack, so limit it.
+      config: { rateLimit: { max: 20, timeWindow: "1 minute" } },
       schema: {
         tags: ["Customer Subscriptions"],
         summary: "Verify a Paystack subscription purchase and activate it if paid",
